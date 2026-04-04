@@ -1,0 +1,16 @@
+[Unit]
+Description=Velyx OS Shell
+PartOf=velyx-session.target
+After=velyx-settings.service velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service
+Requires=velyx-settings.service velyx-permissions.service velyx-launcher.service
+
+[Service]
+Type=simple
+Environment=VELYX_USER_ID=%u
+Environment=HOME=%h
+ExecStart=/usr/bin/velyx-shell
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=velyx-session.target

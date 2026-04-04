@@ -1,0 +1,14 @@
+[Unit]
+Description=Velyx OS User Session Bootstrap
+After=velyx-session-manager.service dbus.service
+Requires=velyx-session-manager.service
+
+[Service]
+Type=oneshot
+Environment=VELYX_USER_ID=%u
+Environment=HOME=%h
+ExecStart=/usr/lib/velyx/boot/velyx-user-session-bootstrap %u
+RemainAfterExit=yes
+
+[Install]
+WantedBy=default.target

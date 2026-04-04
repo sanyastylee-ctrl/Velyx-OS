@@ -1,0 +1,8 @@
+[Unit]
+Description=Velyx OS Boot Target
+Requires=velyx-firstboot.service velyx-session-bootstrap.service
+After=systemd-sysusers.service systemd-tmpfiles-setup.service systemd-user-sessions.service
+AllowIsolate=true
+
+[Install]
+WantedBy=multi-user.target

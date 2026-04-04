@@ -1,0 +1,13 @@
+[Unit]
+Description=Velyx OS First Boot Dispatch
+After=systemd-sysusers.service systemd-tmpfiles-setup.service
+Before=velyx-session-bootstrap.service
+ConditionPathExists=/usr/lib/velyx/boot/velyx-firstboot-dispatch
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/velyx/boot/velyx-firstboot-dispatch
+RemainAfterExit=yes
+
+[Install]
+WantedBy=velyx-boot.target

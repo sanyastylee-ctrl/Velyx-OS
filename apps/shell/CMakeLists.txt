@@ -1,0 +1,34 @@
+qt_add_executable(velyx-shell
+    src/main.cpp
+    src/aiclient.cpp
+    src/aiclient.h
+    src/permissionclient.cpp
+    src/permissionclient.h
+)
+
+qt_add_qml_module(velyx-shell
+    URI Velyx.Apps.Shell
+    VERSION 1.0
+    QML_FILES
+        qml/Main.qml
+        qml/PermissionDialog.qml
+        ai/AIOverlay.qml
+        ai/AICommandPalette.qml
+        ai/AIResultCard.qml
+        ai/AIConfirmationDialog.qml
+    DEPENDENCIES
+        Velyx.DesignSystem/1.0
+        Velyx.UI/1.0
+)
+
+target_link_libraries(velyx-shell
+    PRIVATE
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Qml
+        Qt6::Quick
+        Qt6::QuickControls2
+        Qt6::DBus
+        VelyxDesignSystem
+        VelyxCoreUi
+)

@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "update-engine",
+    "recovery-service",
+    "permissions-service",
+    "compatibility-manager",
+    "launcher-service",
+    "ai-service",
+    "settings-service",
+    "diagnostics-service",
+    "installer-service",
+    "session-manager-service",
+    "file-service",
+]

@@ -1,0 +1,11 @@
+{
+  "app_id": "com.velyx.testapp",
+  "display_name": "Тестовое приложение",
+  "executable_path": "/usr/bin/env",
+  "requested_permissions": [
+    "filesystem"
+  ],
+  "trust_level": "unknown",
+  "category": "utility",
+  "sandbox_profile": "minimal"
+}

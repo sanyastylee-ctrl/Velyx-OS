@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ToolExecutionRequest",
+  "type": "object",
+  "required": ["session_id", "user_id", "intent_id", "tool_id", "arguments", "justification"],
+  "properties": {
+    "session_id": { "type": "string" },
+    "user_id": { "type": "string" },
+    "intent_id": { "type": "string" },
+    "tool_id": { "type": "string" },
+    "arguments": { "type": "object" },
+    "justification": { "type": "string" }
+  }
+}

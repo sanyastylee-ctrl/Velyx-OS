@@ -1,0 +1,13 @@
+[Unit]
+Description=Velyx OS Session Bootstrap Preparation
+After=velyx-firstboot.service systemd-user-sessions.service getty@tty1.service
+Wants=getty@tty1.service
+ConditionPathExists=/usr/lib/velyx/boot/velyx-system-session-bootstrap
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/velyx/boot/velyx-system-session-bootstrap velyx
+RemainAfterExit=yes
+
+[Install]
+WantedBy=velyx-boot.target
