@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use zbus::message::Header;
+use zbus::names::BusName;
 
 pub struct LauncherApi {
     manifests: ManifestRegistry,
@@ -72,7 +73,11 @@ impl LauncherApi {
             Ok(proxy) => proxy,
             Err(_) => return "shell".to_string(),
         };
-        match dbus_proxy.get_name_owner("com.velyx.AI").await {
+        let ai_bus_name = match BusName::try_from("com.velyx.AI") {
+            Ok(name) => name,
+            Err(_) => return "shell".to_string(),
+        };
+        match dbus_proxy.get_name_owner(ai_bus_name).await {
             Ok(owner) if owner.as_str() == sender => "ai".to_string(),
             _ => "shell".to_string(),
         }
