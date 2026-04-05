@@ -22,7 +22,11 @@ ApplicationWindow {
         interval: 3000
         running: true
         repeat: true
-        onTriggered: permissionClient.refreshRuntimeStatus()
+        onTriggered: {
+            permissionClient.refreshRuntimeStatus()
+            permissionClient.refreshSelectedAppRuntime()
+            permissionClient.refreshApps()
+        }
     }
 
     PermissionDialog {
@@ -278,12 +282,28 @@ ApplicationWindow {
                 subtitle: permissionClient.selectedAppInfo.executable_path ? permissionClient.selectedAppInfo.executable_path : "-"
             }
             ListRow {
+                title: "Runtime state"
+                subtitle: permissionClient.selectedAppInfo.runtime_state ? permissionClient.selectedAppInfo.runtime_state : "idle"
+            }
+            ListRow {
+                title: "Runtime pid"
+                subtitle: permissionClient.selectedAppInfo.runtime_pid ? permissionClient.selectedAppInfo.runtime_pid : "-"
+            }
+            ListRow {
                 title: "Last launch"
                 subtitle: permissionClient.selectedAppInfo.last_launch_status ? permissionClient.selectedAppInfo.last_launch_status : "-"
             }
             ListRow {
                 title: "Last pid"
                 subtitle: permissionClient.selectedAppInfo.last_pid ? permissionClient.selectedAppInfo.last_pid : "-"
+            }
+            ListRow {
+                title: "Last exit code"
+                subtitle: permissionClient.selectedAppInfo.runtime_exit_code ? permissionClient.selectedAppInfo.runtime_exit_code : "-"
+            }
+            ListRow {
+                title: "Failure reason"
+                subtitle: permissionClient.selectedAppInfo.runtime_failure_reason ? permissionClient.selectedAppInfo.runtime_failure_reason : "-"
             }
 
             Item { Layout.fillHeight: true }
@@ -297,6 +317,20 @@ ApplicationWindow {
                     text: "Launch"
                     enabled: permissionClient.selectedAppId.length > 0
                     onClicked: permissionClient.launchSelectedApp()
+                }
+
+                Button {
+                    Layout.fillWidth: true
+                    text: "Stop"
+                    enabled: permissionClient.selectedAppId.length > 0
+                    onClicked: permissionClient.stopSelectedApp()
+                }
+
+                Button {
+                    Layout.fillWidth: true
+                    text: "Restart"
+                    enabled: permissionClient.selectedAppId.length > 0
+                    onClicked: permissionClient.restartSelectedApp()
                 }
 
                 Button {
@@ -367,6 +401,7 @@ ApplicationWindow {
                         color: permissionClient.launchStatus === "denied"
                             ? Theme.danger
                             : ((permissionClient.launchStatus === "allowed"
+                                || permissionClient.launchStatus === "already_running"
                                 || permissionClient.launchStatus === "launched")
                                ? Theme.accentStrong
                                : Theme.textPrimary)

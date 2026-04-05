@@ -226,6 +226,20 @@ QVariantMap PermissionClient::fetchAppInfo(const QString &appId)
     return reply.value();
 }
 
+QVariantMap PermissionClient::fetchAppRuntime(const QString &appId)
+{
+    QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
+    if (!launcher.isValid()) {
+        return {};
+    }
+
+    QDBusReply<QVariantMap> reply = launcher.call("GetAppRuntime", appId);
+    if (!reply.isValid()) {
+        return {};
+    }
+    return reply.value();
+}
+
 void PermissionClient::selectApp(const QString &appId)
 {
     const QVariantMap info = fetchAppInfo(appId);
@@ -240,7 +254,34 @@ void PermissionClient::selectApp(const QString &appId)
     m_pendingAppName = info.value("display_name", m_pendingAppId).toString();
     m_pendingPermission = info.value("requested_permissions").toString().split(',', Qt::SkipEmptyParts).value(0);
     emit selectedAppInfoChanged();
+    refreshSelectedAppRuntime();
     updateStatusDetails("get_app_info", "ok", "app_selected", "launch");
+}
+
+void PermissionClient::refreshSelectedAppRuntime()
+{
+    if (m_selectedAppInfo.isEmpty()) {
+        return;
+    }
+
+    const QString appId = m_selectedAppInfo.value("app_id").toString();
+    const QVariantMap runtime = fetchAppRuntime(appId);
+    if (runtime.isEmpty()) {
+        return;
+    }
+
+    QVariantMap updated = fetchAppInfo(appId);
+    if (updated.isEmpty()) {
+        updated = m_selectedAppInfo;
+    }
+    updated.insert("runtime_state", runtime.value("state"));
+    updated.insert("runtime_pid", runtime.value("pid"));
+    updated.insert("runtime_launch_status", runtime.value("launch_status"));
+    updated.insert("runtime_exited_at", runtime.value("exited_at"));
+    updated.insert("runtime_exit_code", runtime.value("exit_code"));
+    updated.insert("runtime_failure_reason", runtime.value("failure_reason"));
+    m_selectedAppInfo = updated;
+    emit selectedAppInfoChanged();
 }
 
 void PermissionClient::launchSelectedApp()
@@ -269,6 +310,77 @@ void PermissionClient::startLaunch(
     requestLaunchFromLauncher(appId, appName, permission);
 }
 
+void PermissionClient::stopSelectedApp()
+{
+    if (m_selectedAppInfo.isEmpty()) {
+        updateLaunchState("error", "Сначала выберите приложение");
+        updateStatusDetails("stop", "error", "no_app_selected", "select_app");
+        return;
+    }
+
+    const QString appId = m_selectedAppInfo.value("app_id").toString();
+    QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
+    if (!launcher.isValid()) {
+        updateLaunchState("error", "launcher-service недоступен");
+        updateStatusDetails("stop", "error", "launcher_unavailable", "retry");
+        refreshRuntimeStatus();
+        return;
+    }
+
+    QDBusReply<QVariantMap> reply = launcher.call("StopApp", appId);
+    if (!reply.isValid()) {
+        updateLaunchState("error", "Не удалось остановить приложение");
+        updateStatusDetails("stop", "error", "stop_call_failed", "retry");
+        return;
+    }
+
+    const QVariantMap payload = reply.value();
+    updateLaunchState(payload.value("status").toString(), payload.value("message").toString());
+    updateStatusDetails(
+        "process_stop",
+        payload.value("status").toString(),
+        payload.value("reason").toString(),
+        payload.value("next_action").toString());
+    refreshSelectedAppRuntime();
+    refreshApps();
+}
+
+void PermissionClient::restartSelectedApp()
+{
+    if (m_selectedAppInfo.isEmpty()) {
+        updateLaunchState("error", "Сначала выберите приложение");
+        updateStatusDetails("restart", "error", "no_app_selected", "select_app");
+        return;
+    }
+
+    const QString appId = m_selectedAppInfo.value("app_id").toString();
+    QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
+    if (!launcher.isValid()) {
+        updateLaunchState("error", "launcher-service недоступен");
+        updateStatusDetails("restart", "error", "launcher_unavailable", "retry");
+        refreshRuntimeStatus();
+        return;
+    }
+
+    QDBusReply<QVariantMap> reply = launcher.call("RestartApp", appId);
+    if (!reply.isValid()) {
+        updateLaunchState("error", "Не удалось перезапустить приложение");
+        updateStatusDetails("restart", "error", "restart_call_failed", "retry");
+        return;
+    }
+
+    const QVariantMap payload = reply.value();
+    const QString status = payload.value("status").toString();
+    updateLaunchState(status, payload.value("message").toString());
+    updateStatusDetails(
+        "process_restart",
+        status,
+        payload.value("reason").toString(),
+        payload.value("next_action").toString());
+    refreshSelectedAppRuntime();
+    refreshApps();
+}
+
 void PermissionClient::requestLaunchFromLauncher(
     const QString &appId,
     const QString &appName,
@@ -295,13 +407,15 @@ void PermissionClient::requestLaunchFromLauncher(
     const QString status = payload.value("status").toString();
     const QString reason = payload.value("reason").toString();
     const QString nextAction = payload.value("next_action").toString();
-    if (status == "launched" || status == "started") {
+    if (status == "launched" || status == "started" || status == "already_running") {
         updateStatusDetails("launch_allowed", status, reason, nextAction);
         const QString message = payload.value("pid").toString().isEmpty()
             ? payload.value("message").toString()
             : QString("%1 (pid=%2)")
                   .arg(payload.value("message").toString(), payload.value("pid").toString());
         handleAllowedLaunch(message);
+        refreshSelectedAppRuntime();
+        refreshApps();
         return;
     }
 
@@ -314,6 +428,7 @@ void PermissionClient::requestLaunchFromLauncher(
     if (status == "failed") {
         updateLaunchState("error", payload.value("message").toString());
         updateStatusDetails("launch_failed", status, reason, nextAction);
+        refreshSelectedAppRuntime();
         return;
     }
 
@@ -330,6 +445,7 @@ void PermissionClient::requestLaunchFromLauncher(
 
     updateLaunchState("error", payload.value("message", "Secure launcher вернул неизвестный статус").toString());
     updateStatusDetails("launch_requested", "error", reason, nextAction);
+    refreshSelectedAppRuntime();
 }
 
 void PermissionClient::submitDecision(

@@ -5,7 +5,7 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use tokio::process::{Child, Command};
 
 #[derive(Clone, Debug)]
 pub enum MountAccess {
@@ -56,11 +56,16 @@ pub struct SandboxLaunchRequest {
 pub struct ProcessIdentity {
     pub pid: u32,
     pub app_id: String,
+    pub state: String,
     pub sandbox_profile: String,
     pub launch_time: String,
+    pub exited_at: Option<String>,
+    pub exit_code: Option<i32>,
     pub launch_status: String,
     pub sandbox_id: String,
     pub launched_by: String,
+    pub failure_reason: Option<String>,
+    pub stop_requested: bool,
 }
 
 pub struct SandboxLaunchResult {
@@ -68,6 +73,7 @@ pub struct SandboxLaunchResult {
     pub runtime_path: String,
     pub applied_mounts: Vec<String>,
     pub filtered_env: Vec<String>,
+    pub child: Child,
 }
 
 pub struct SandboxRunner;
@@ -201,23 +207,32 @@ impl SandboxRunner {
         let runtime_target = format!("/app/runtime/{executable_name}");
         command.arg(runtime_target.clone());
 
-        let child = command
+        let mut child = command
             .spawn()
             .map_err(|err| format!("failed to launch sandboxed process: {err}"))?;
+        let pid = child
+            .id()
+            .ok_or_else(|| "failed to resolve sandboxed process pid".to_string())?;
 
         Ok(SandboxLaunchResult {
             identity: ProcessIdentity {
-                pid: child.id(),
+                pid,
                 app_id: request.app_id.clone(),
+                state: "running".to_string(),
                 sandbox_profile: policy.profile_name,
                 launch_time: Utc::now().to_rfc3339(),
+                exited_at: None,
+                exit_code: None,
                 launch_status: "launched".to_string(),
                 sandbox_id,
                 launched_by: request.launched_by.clone(),
+                failure_reason: None,
+                stop_requested: false,
             },
             runtime_path: runtime_target,
             applied_mounts,
             filtered_env: allowed_env,
+            child,
         })
     }
 }

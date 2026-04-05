@@ -29,7 +29,10 @@ public:
     Q_INVOKABLE void refreshApps();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
+    Q_INVOKABLE void refreshSelectedAppRuntime();
     Q_INVOKABLE void launchSelectedApp();
+    Q_INVOKABLE void stopSelectedApp();
+    Q_INVOKABLE void restartSelectedApp();
     Q_INVOKABLE void startLaunch(
         const QString &appId,
         const QString &appName,
@@ -72,6 +75,7 @@ private:
         const QString &appId,
         const QString &appName,
         const QString &permission);
+    QVariantMap fetchAppRuntime(const QString &appId);
     void updateLaunchState(const QString &status, const QString &message);
     void updateStatusDetails(
         const QString &action,
