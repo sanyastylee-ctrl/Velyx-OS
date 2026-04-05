@@ -234,7 +234,15 @@ ApplicationWindow {
                         }
 
                         Label {
-                            text: "trust=" + parent.parent.modelData.trust_level
+                            text: (parent.parent.modelData.session_required === "true" ? "[required] " : "[optional] ")
+                                + "trust=" + parent.parent.modelData.trust_level
+                            color: Theme.textMuted
+                            font.pixelSize: 11
+                        }
+
+                        Label {
+                            text: "state=" + (parent.parent.modelData.runtime_state ? parent.parent.modelData.runtime_state : "idle")
+                                + (parent.parent.modelData.runtime_pid ? " pid=" + parent.parent.modelData.runtime_pid : "")
                             color: Theme.textMuted
                             font.pixelSize: 11
                         }
@@ -274,6 +282,14 @@ ApplicationWindow {
                 subtitle: permissionClient.selectedAppInfo.trust_level ? permissionClient.selectedAppInfo.trust_level : "-"
             }
             ListRow {
+                title: "Required"
+                subtitle: permissionClient.selectedAppInfo.session_required ? permissionClient.selectedAppInfo.session_required : "false"
+            }
+            ListRow {
+                title: "Autostart"
+                subtitle: permissionClient.selectedAppInfo.session_autostart ? permissionClient.selectedAppInfo.session_autostart : "false"
+            }
+            ListRow {
                 title: "Required permissions"
                 subtitle: permissionClient.selectedAppInfo.requested_permissions ? permissionClient.selectedAppInfo.requested_permissions : "-"
             }
@@ -304,6 +320,10 @@ ApplicationWindow {
             ListRow {
                 title: "Failure reason"
                 subtitle: permissionClient.selectedAppInfo.runtime_failure_reason ? permissionClient.selectedAppInfo.runtime_failure_reason : "-"
+            }
+            ListRow {
+                title: "Restart attempts"
+                subtitle: permissionClient.selectedAppInfo.session_retry_count ? permissionClient.selectedAppInfo.session_retry_count : "0"
             }
 
             Item { Layout.fillHeight: true }

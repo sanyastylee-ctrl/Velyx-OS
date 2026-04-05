@@ -3,19 +3,23 @@ use crate::errors::SessionManagerError;
 use crate::first_boot::{has_pending_first_boot, run_first_boot_flow};
 use crate::health::{check_optional_services, check_required_services, compute_session_health};
 use crate::model::{SessionHealthStatus, SessionSnapshot, SessionState};
+use crate::orchestrator::spawn_orchestrator_loop;
 use crate::shell_launch::build_shell_runtime;
 use crate::startup::bootstrap_session;
 use crate::state::SessionStateStore;
 use crate::units::{is_active, restart_unit, sorted_runtime_units, stop_target};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+use tokio::task::JoinHandle;
 use tokio::sync::Mutex;
 
 pub struct SessionManagerApi {
     state: Arc<Mutex<SessionStateStore>>,
     audit: SessionAuditLogger,
     base_dir: PathBuf,
+    orchestrator_running: Arc<AtomicBool>,
+    orchestrator_task: Arc<Mutex<Option<JoinHandle<()>>>>,
 }
 
 impl SessionManagerApi {
@@ -24,6 +28,8 @@ impl SessionManagerApi {
             state: Arc::new(Mutex::new(state)),
             audit,
             base_dir,
+            orchestrator_running: Arc::new(AtomicBool::new(false)),
+            orchestrator_task: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -83,7 +89,50 @@ impl SessionManagerApi {
                 .collect::<Vec<_>>()
                 .join(","),
         );
+        payload.insert(
+            "apps_status".to_string(),
+            snapshot
+                .apps
+                .iter()
+                .map(|app| {
+                    format!(
+                        "{}:{}:{}:{}:{}:{}",
+                        app.app_id,
+                        app.state,
+                        app.pid.map(|value| value.to_string()).unwrap_or_default(),
+                        app.required,
+                        app.autostart,
+                        app.retry_count
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("|"),
+        );
         payload
+    }
+
+    async fn ensure_orchestrator_running(&self, user_id: &str) {
+        if self.orchestrator_running.load(Ordering::SeqCst) {
+            return;
+        }
+        self.orchestrator_running.store(true, Ordering::SeqCst);
+        let handle = spawn_orchestrator_loop(
+            Arc::clone(&self.state),
+            self.audit.clone(),
+            self.base_dir.clone(),
+            user_id.to_string(),
+            Arc::clone(&self.orchestrator_running),
+        );
+        let mut task = self.orchestrator_task.lock().await;
+        *task = Some(handle);
+    }
+
+    async fn stop_orchestrator(&self) {
+        self.orchestrator_running.store(false, Ordering::SeqCst);
+        let mut task = self.orchestrator_task.lock().await;
+        if let Some(handle) = task.take() {
+            handle.abort();
+        }
     }
 }
 
@@ -117,6 +166,9 @@ impl SessionManagerApi {
                 .await
                 .unwrap_or_else(|_| "unknown".to_string()),
         );
+        if outcome.state != SessionState::Failed {
+            self.ensure_orchestrator_running(user_id).await;
+        }
         Ok(payload)
     }
 
@@ -133,6 +185,10 @@ impl SessionManagerApi {
                 .unwrap_or_else(|_| "unknown".to_string()),
         );
         Ok(payload)
+    }
+
+    async fn get_session_state(&self) -> zbus::fdo::Result<HashMap<String, String>> {
+        self.get_session_status().await
     }
 
     async fn get_session_health(&self) -> zbus::fdo::Result<HashMap<String, String>> {
@@ -211,6 +267,9 @@ impl SessionManagerApi {
                 .await
                 .unwrap_or_else(|_| "unknown".to_string()),
         );
+        if outcome.state != SessionState::Failed {
+            self.ensure_orchestrator_running(&user_id).await;
+        }
         Ok(payload)
     }
 
@@ -243,6 +302,7 @@ impl SessionManagerApi {
     }
 
     async fn stop_user_session(&self) -> zbus::fdo::Result<bool> {
+        self.stop_orchestrator().await;
         let mut state = self.state.lock().await;
         let from = state.snapshot().current_state.as_str().to_string();
         stop_target("velyx-session.target")

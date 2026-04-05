@@ -1,4 +1,4 @@
-use crate::model::{ServiceHealth, SessionSnapshot, SessionState, ShellRuntime};
+use crate::model::{AppRuntimeSnapshot, ServiceHealth, SessionSnapshot, SessionState, ShellRuntime};
 use chrono::Utc;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,6 +48,11 @@ impl SessionStateStore {
         self.persist()
     }
 
+    pub fn set_app_snapshots(&mut self, apps: Vec<AppRuntimeSnapshot>) -> Result<(), String> {
+        self.snapshot.apps = apps;
+        self.persist()
+    }
+
     pub fn set_shell_runtime(&mut self, shell: ShellRuntime) -> Result<(), String> {
         self.snapshot.shell = shell;
         self.persist()
@@ -81,6 +86,7 @@ impl SessionStateStore {
         self.snapshot.startup_deadline_epoch_ms = None;
         self.snapshot.required_services.clear();
         self.snapshot.optional_services.clear();
+        self.snapshot.apps.clear();
         self.persist()
     }
 

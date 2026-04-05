@@ -86,6 +86,7 @@ private:
     void handleDeniedLaunch(const QString &appName, const QString &permissionDisplayName);
 
     QVariantList m_apps;
+    QVariantMap m_sessionApps;
     QVariantMap m_selectedAppInfo;
     QString m_pendingAppId;
     QString m_pendingAppName;

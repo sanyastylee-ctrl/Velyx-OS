@@ -5,6 +5,7 @@ mod first_boot;
 mod health;
 mod handoff;
 mod model;
+mod orchestrator;
 mod shell_launch;
 mod startup;
 mod state;

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SessionState {
     Idle,
     Bootstrapping,
@@ -30,7 +30,7 @@ impl SessionState {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum SessionHealthStatus {
     Healthy,
     Degraded,
@@ -98,6 +98,30 @@ impl ServiceHealth {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AppRegistryEntry {
+    pub app_id: String,
+    pub required: bool,
+    pub autostart: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct AppRuntimeSnapshot {
+    pub app_id: String,
+    pub required: bool,
+    pub autostart: bool,
+    pub state: String,
+    pub pid: Option<u32>,
+    pub launched_at: Option<String>,
+    pub exited_at: Option<String>,
+    pub exit_code: Option<i32>,
+    pub launch_status: String,
+    pub sandbox_id: Option<String>,
+    pub failure_reason: Option<String>,
+    pub retry_count: u32,
+    pub stop_requested: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FirstBootSnapshot {
     pub state: FirstBootState,
     pub install_id: String,
@@ -155,6 +179,7 @@ pub struct SessionSnapshot {
     pub shell: ShellRuntime,
     pub required_services: Vec<ServiceHealth>,
     pub optional_services: Vec<ServiceHealth>,
+    pub apps: Vec<AppRuntimeSnapshot>,
     pub startup_deadline_epoch_ms: Option<u64>,
     pub retry_count: u32,
 }
@@ -173,6 +198,7 @@ impl Default for SessionSnapshot {
             },
             required_services: Vec::new(),
             optional_services: Vec::new(),
+            apps: Vec::new(),
             startup_deadline_epoch_ms: None,
             retry_count: 0,
         }

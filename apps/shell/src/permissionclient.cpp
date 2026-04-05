@@ -136,7 +136,15 @@ void PermissionClient::refreshApps()
     const QVariantList items = reply.arguments().constFirst().toList();
     QVariantList apps;
     for (const QVariant &item : items) {
-        const QVariantMap map = item.toMap();
+        QVariantMap map = item.toMap();
+        const QVariantMap sessionApp = m_sessionApps.value(map.value("app_id").toString()).toMap();
+        if (!sessionApp.isEmpty()) {
+            map.insert("session_required", sessionApp.value("required"));
+            map.insert("session_autostart", sessionApp.value("autostart"));
+            map.insert("session_retry_count", sessionApp.value("retry_count"));
+            map.insert("runtime_state", sessionApp.value("state", map.value("runtime_state")));
+            map.insert("runtime_pid", sessionApp.value("pid", map.value("runtime_pid")));
+        }
         if (!map.isEmpty()) {
             apps.push_back(map);
         }
@@ -186,12 +194,27 @@ void PermissionClient::refreshRuntimeStatus()
 
     QString sessionState = "unknown";
     QString sessionHealth = "unknown";
+    QVariantMap sessionApps;
     if (sessionManager.isValid()) {
-        QDBusReply<QVariantMap> reply = sessionManager.call("GetSessionStatus");
+        QDBusReply<QVariantMap> reply = sessionManager.call("GetSessionState");
         if (reply.isValid()) {
             const QVariantMap payload = reply.value();
             sessionState = payload.value("state", "unknown").toString();
             sessionHealth = payload.value("health", "unknown").toString();
+            const QString appsStatus = payload.value("apps_status").toString();
+            for (const QString &entry : appsStatus.split('|', Qt::SkipEmptyParts)) {
+                const QStringList parts = entry.split(':');
+                if (parts.size() < 6) {
+                    continue;
+                }
+                QVariantMap app;
+                app.insert("state", parts.value(1));
+                app.insert("pid", parts.value(2));
+                app.insert("required", parts.value(3));
+                app.insert("autostart", parts.value(4));
+                app.insert("retry_count", parts.value(5));
+                sessionApps.insert(parts.value(0), app);
+            }
         } else {
             sessionState = "error";
             sessionHealth = "error";
@@ -204,6 +227,10 @@ void PermissionClient::refreshRuntimeStatus()
     }
     if (m_sessionHealth != sessionHealth) {
         m_sessionHealth = sessionHealth;
+        changed = true;
+    }
+    if (m_sessionApps != sessionApps) {
+        m_sessionApps = sessionApps;
         changed = true;
     }
 
@@ -273,6 +300,12 @@ void PermissionClient::refreshSelectedAppRuntime()
     QVariantMap updated = fetchAppInfo(appId);
     if (updated.isEmpty()) {
         updated = m_selectedAppInfo;
+    }
+    const QVariantMap sessionApp = m_sessionApps.value(appId).toMap();
+    if (!sessionApp.isEmpty()) {
+        updated.insert("session_required", sessionApp.value("required"));
+        updated.insert("session_autostart", sessionApp.value("autostart"));
+        updated.insert("session_retry_count", sessionApp.value("retry_count"));
     }
     updated.insert("runtime_state", runtime.value("state"));
     updated.insert("runtime_pid", runtime.value("pid"));

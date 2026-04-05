@@ -146,6 +146,10 @@ impl LauncherApi {
         payload.insert("sandbox_id".to_string(), runtime.sandbox_id.clone());
         payload.insert("launched_by".to_string(), runtime.launched_by.clone());
         payload.insert(
+            "stop_requested".to_string(),
+            runtime.stop_requested.to_string(),
+        );
+        payload.insert(
             "failure_reason".to_string(),
             runtime.failure_reason.clone().unwrap_or_default(),
         );
