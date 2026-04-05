@@ -93,18 +93,34 @@ impl LauncherApi {
     fn build_prompt_payload(
         mut payload: HashMap<String, String>,
         manifest: &AppManifest,
+        required_permission: &str,
     ) -> HashMap<String, String> {
         payload.insert("status".to_string(), "prompt".to_string());
+        payload.insert("app_id".to_string(), manifest.app_id.clone());
         payload.insert("display_name".to_string(), manifest.display_name.clone());
+        payload.insert("required_permission".to_string(), required_permission.to_string());
+        payload.insert("reason".to_string(), "permission_required".to_string());
+        payload.insert("next_action".to_string(), "store_decision".to_string());
         payload.insert("trust_level".to_string(), manifest.trust_level.as_str().to_string());
         payload.insert("sandbox_profile".to_string(), manifest.sandbox_profile.clone());
         payload
     }
 
-    fn build_terminal_payload(status: &str, message: &str) -> HashMap<String, String> {
+    fn build_terminal_payload(
+        status: &str,
+        message: &str,
+        app_id: &str,
+        required_permission: &str,
+        reason: &str,
+        next_action: &str,
+    ) -> HashMap<String, String> {
         let mut payload = HashMap::new();
         payload.insert("status".to_string(), status.to_string());
         payload.insert("message".to_string(), message.to_string());
+        payload.insert("app_id".to_string(), app_id.to_string());
+        payload.insert("required_permission".to_string(), required_permission.to_string());
+        payload.insert("reason".to_string(), reason.to_string());
+        payload.insert("next_action".to_string(), next_action.to_string());
         payload
     }
 }
@@ -119,18 +135,38 @@ impl LauncherApi {
         let Some(manifest) = self.manifests.get(app_id).cloned() else {
             let _ = self
                 .audit
-                .log_launch_history(app_id, "unknown", "deny", "missing", "unknown_manifest");
+                .log_launch_history(
+                    app_id,
+                    "launch_requested",
+                    "unknown",
+                    "deny",
+                    "missing",
+                    "unknown_manifest",
+                );
             return Ok(Self::build_terminal_payload(
                 "deny",
                 &format!(
                     "Запуск запрещен: app_id '{}' не зарегистрирован в manifests",
                     app_id
                 ),
+                app_id,
+                "",
+                "unknown_app_id",
+                "fix_manifest",
             ));
         };
+        let _ = self.audit.log_launch_history(
+            app_id,
+            "launch_requested",
+            manifest.trust_level.as_str(),
+            "requested",
+            &manifest.sandbox_profile,
+            "received",
+        );
         if manifest.sandbox_profile.trim().is_empty() {
             let _ = self.audit.log_launch_history(
                 app_id,
+                "launch_denied",
                 manifest.trust_level.as_str(),
                 "deny",
                 "missing",
@@ -139,6 +175,10 @@ impl LauncherApi {
             return Ok(Self::build_terminal_payload(
                 "deny",
                 "launch denied: sandbox profile не задан",
+                app_id,
+                "",
+                "sandbox_profile_missing",
+                "fix_manifest",
             ));
         }
 
@@ -154,6 +194,7 @@ impl LauncherApi {
             if status == "deny" {
                 let _ = self.audit.log_launch_history(
                     app_id,
+                    "launch_denied",
                     manifest.trust_level.as_str(),
                     "deny",
                     &manifest.sandbox_profile,
@@ -162,14 +203,19 @@ impl LauncherApi {
                 return Ok(Self::build_terminal_payload(
                     "deny",
                     &format!("Запуск {} запрещен политикой разрешений", app_id),
+                    app_id,
+                    permission,
+                    "permission_denied",
+                    "review_permission_state",
                 ));
             }
 
             if status == "prompt" {
                 let payload = Self::request_permission(app_id, permission).await?;
-                pending_prompt = Some(Self::build_prompt_payload(payload, &manifest));
+                pending_prompt = Some(Self::build_prompt_payload(payload, &manifest, permission));
                 let _ = self.audit.log_launch_history(
                     app_id,
+                    "launch_prompted",
                     manifest.trust_level.as_str(),
                     "prompt",
                     &manifest.sandbox_profile,
@@ -198,6 +244,7 @@ impl LauncherApi {
             Err(err) => {
                 let _ = self.audit.log_launch_history(
                     app_id,
+                    "launch_denied",
                     manifest.trust_level.as_str(),
                     "deny",
                     &manifest.sandbox_profile,
@@ -214,6 +261,7 @@ impl LauncherApi {
         let _ = self.audit.log_sandbox(&launched, &permission_summary, "started");
         let _ = self.audit.log_launch_history(
             app_id,
+            "launch_allowed",
             manifest.trust_level.as_str(),
             "allow",
             &manifest.sandbox_profile,
@@ -237,6 +285,9 @@ impl LauncherApi {
             ),
         );
         payload.insert("app_id".to_string(), app_id.to_string());
+        payload.insert("required_permission".to_string(), String::new());
+        payload.insert("reason".to_string(), "all_permissions_satisfied".to_string());
+        payload.insert("next_action".to_string(), "none".to_string());
         payload.insert("sandbox".to_string(), "bwrap".to_string());
         payload.insert("sandbox_profile".to_string(), manifest.sandbox_profile.clone());
         payload.insert("trust_level".to_string(), manifest.trust_level.as_str().to_string());

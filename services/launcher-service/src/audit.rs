@@ -23,6 +23,7 @@ impl LauncherAuditLogger {
     pub fn log_launch_history(
         &self,
         app_id: &str,
+        action: &str,
         trust_level: &str,
         decision: &str,
         sandbox_profile: &str,
@@ -31,9 +32,10 @@ impl LauncherAuditLogger {
         self.write_line(
             &self.history_path,
             &format!(
-                "{} app_id={} trust_level={} decision={} sandbox_profile={} result={}",
+                "{} app_id={} action={} trust_level={} decision={} sandbox_profile={} result={}",
                 Self::now(),
                 app_id,
+                action,
                 trust_level,
                 decision,
                 sandbox_profile,

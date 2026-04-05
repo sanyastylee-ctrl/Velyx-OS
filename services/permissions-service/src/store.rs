@@ -77,6 +77,38 @@ impl PermissionStore {
         }
     }
 
+    pub fn get_permission_state(
+        &self,
+        user_id: &str,
+        app_id: &str,
+        permission: &PermissionKind,
+    ) -> Option<Decision> {
+        self.decisions
+            .get(&(user_id.to_string(), app_id.to_string(), permission.clone()))
+            .cloned()
+    }
+
+    pub fn list_app_permissions(
+        &self,
+        user_id: &str,
+        app_id: &str,
+    ) -> HashMap<String, String> {
+        let mut permissions = HashMap::new();
+        for permission in [
+            PermissionKind::Camera,
+            PermissionKind::Microphone,
+            PermissionKind::Filesystem,
+            PermissionKind::ScreenCapture,
+        ] {
+            let value = self
+                .get_permission_state(user_id, app_id, &permission)
+                .map(|decision| decision.as_status().to_string())
+                .unwrap_or_else(|| "unknown".to_string());
+            permissions.insert(permission.as_str().to_string(), value);
+        }
+        permissions
+    }
+
     pub fn save_decision(
         &mut self,
         user_id: &str,

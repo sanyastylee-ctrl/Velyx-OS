@@ -148,7 +148,7 @@ impl PermissionsApi {
         self.write_audit(
             app_id,
             permission_kind.as_str(),
-            "check",
+            "permission_check",
             &decision.result.to_string(),
             &context.sender,
             trust_level.as_str(),
@@ -180,7 +180,7 @@ impl PermissionsApi {
             self.write_audit(
                 app_id,
                 permission_kind.as_str(),
-                "request",
+                "permission_check",
                 "deny_store_unavailable",
                 &sender,
                 trust_level.as_str(),
@@ -192,7 +192,7 @@ impl PermissionsApi {
         self.write_audit(
             app_id,
             permission_kind.as_str(),
-            "request",
+            "permission_check",
             "prompt",
             &sender,
             trust_level.as_str(),
@@ -215,6 +215,80 @@ impl PermissionsApi {
         payload.insert("status".to_string(), "prompt".to_string());
 
         Ok(payload)
+    }
+
+    async fn get_permission_state(
+        &self,
+        app_id: &str,
+        permission: &str,
+        #[zbus(header)] header: Header<'_>,
+    ) -> zbus::fdo::Result<String> {
+        let permission_kind = Self::parse_permission(permission)?;
+        let sender = Self::sender_from_header(&header);
+        let trust_level = trust_level_for_app(app_id);
+        let identity = self.observe_identity(&sender, app_id).await;
+        self.audit_identity_event(
+            app_id,
+            permission_kind.as_str(),
+            &sender,
+            trust_level.as_str(),
+            &identity,
+        );
+
+        let store = self.store.lock().await;
+        let state = store
+            .get_permission_state(&self.user_id, app_id, &permission_kind)
+            .map(|decision| decision.as_status().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        drop(store);
+
+        self.write_audit(
+            app_id,
+            permission_kind.as_str(),
+            "permission_check",
+            &state,
+            &sender,
+            trust_level.as_str(),
+            "store",
+        );
+
+        Ok(state)
+    }
+
+    async fn list_app_permissions(
+        &self,
+        app_id: &str,
+        #[zbus(header)] header: Header<'_>,
+    ) -> zbus::fdo::Result<Vec<HashMap<String, String>>> {
+        let sender = Self::sender_from_header(&header);
+        let trust_level = trust_level_for_app(app_id);
+        let identity = self.observe_identity(&sender, app_id).await;
+        self.audit_identity_event(app_id, "*", &sender, trust_level.as_str(), &identity);
+
+        let store = self.store.lock().await;
+        let entries = store.list_app_permissions(&self.user_id, app_id);
+        drop(store);
+
+        self.write_audit(
+            app_id,
+            "*",
+            "permission_check",
+            "list_app_permissions",
+            &sender,
+            trust_level.as_str(),
+            "store",
+        );
+
+        Ok(entries
+            .into_iter()
+            .map(|(permission, state)| {
+                let mut payload = HashMap::new();
+                payload.insert("app_id".to_string(), app_id.to_string());
+                payload.insert("permission".to_string(), permission);
+                payload.insert("state".to_string(), state);
+                payload
+            })
+            .collect())
     }
 
     async fn store_decision(
@@ -245,10 +319,23 @@ impl PermissionsApi {
                 parsed_decision.clone(),
             )
             .map_err(zbus::fdo::Error::Failed)?;
+        let decision_action = match &parsed_decision {
+            Decision::Allow => "permission_granted",
+            Decision::Deny => "permission_denied",
+        };
         self.write_audit(
             app_id,
             permission_kind.as_str(),
+            decision_action,
+            parsed_decision.as_status(),
+            &sender,
+            trust_level.as_str(),
             "store",
+        );
+        self.write_audit(
+            app_id,
+            permission_kind.as_str(),
+            "permission_persisted",
             parsed_decision.as_status(),
             &sender,
             trust_level.as_str(),
