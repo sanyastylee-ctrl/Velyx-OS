@@ -57,7 +57,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "velyx-settings.service",
             "Velyx OS Settings Service",
             "com.velyx.Settings",
-            true,
+            false,
             10,
             "on-failure",
             &env_exec("VELYX_SETTINGS_BINARY", "/usr/bin/velyx-settings-service"),
@@ -152,7 +152,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
     ];
     if let Some(shell) = units.iter_mut().find(|unit| unit.unit_name == "velyx-shell.service") {
         shell.contents = format!(
-            "[Unit]\nDescription=Velyx OS Shell\nPartOf=velyx-session.target\nAfter=velyx-settings.service velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service\nRequires=velyx-settings.service velyx-permissions.service velyx-launcher.service\n\n[Service]\nType=simple\nEnvironment=VELYX_USER_ID=%u\nEnvironment=HOME=%h\nExecStart={}\nRestart=always\nRestartSec=1\n\n[Install]\nWantedBy=velyx-session.target\n",
+            "[Unit]\nDescription=Velyx OS Shell\nPartOf=velyx-session.target\nAfter=velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service\nRequires=velyx-permissions.service velyx-launcher.service\nWants=velyx-settings.service\nAfter=velyx-settings.service\n\n[Service]\nType=simple\nEnvironment=VELYX_USER_ID=%u\nEnvironment=HOME=%h\nExecStart={}\nRestart=always\nRestartSec=1\n\n[Install]\nWantedBy=velyx-session.target\n",
             env_exec("VELYX_SHELL_BINARY", "/usr/bin/velyx-shell")
         );
     }

@@ -323,6 +323,21 @@ pub async fn finalize_startup(
                 "session startup completed",
             )
             .map_err(SessionManagerError::StartupFailed)?;
+            audit
+                .log_transition(
+                    "session_ready_with_shell",
+                    SessionState::Ready.as_str(),
+                    SessionState::Ready.as_str(),
+                    user_id,
+                    "velyx-shell.service",
+                    "ok",
+                    &format!(
+                        "shell_status={} shell_pid={}",
+                        shell.shell_state,
+                        shell.shell_pid.unwrap_or_default()
+                    ),
+                )
+                .map_err(SessionManagerError::StartupFailed)?;
             Ok(StartupOutcome {
                 state: SessionState::Ready,
                 health,
@@ -349,6 +364,22 @@ pub async fn finalize_startup(
                 &reason,
             )
             .map_err(SessionManagerError::StartupFailed)?;
+            audit
+                .log_transition(
+                    "session_ready_with_shell",
+                    SessionState::Degraded.as_str(),
+                    SessionState::Degraded.as_str(),
+                    user_id,
+                    "velyx-shell.service",
+                    "degraded",
+                    &format!(
+                        "shell_status={} shell_pid={} reason={}",
+                        shell.shell_state,
+                        shell.shell_pid.unwrap_or_default(),
+                        reason
+                    ),
+                )
+                .map_err(SessionManagerError::StartupFailed)?;
             Ok(StartupOutcome {
                 state: SessionState::Degraded,
                 health,

@@ -1,8 +1,10 @@
 [Unit]
 Description=Velyx OS Shell
 PartOf=velyx-session.target
-After=velyx-settings.service velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service
-Requires=velyx-settings.service velyx-permissions.service velyx-launcher.service
+After=velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service
+Requires=velyx-permissions.service velyx-launcher.service
+Wants=velyx-settings.service
+After=velyx-settings.service
 
 [Service]
 Type=simple
