@@ -17,11 +17,17 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString lastResult READ lastResult NOTIFY statusDetailsChanged)
     Q_PROPERTY(QString lastReason READ lastReason NOTIFY statusDetailsChanged)
     Q_PROPERTY(QString nextAction READ nextAction NOTIFY statusDetailsChanged)
+    Q_PROPERTY(QString launcherAvailability READ launcherAvailability NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString permissionsAvailability READ permissionsAvailability NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString sessionAvailability READ sessionAvailability NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString sessionState READ sessionState NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString sessionHealth READ sessionHealth NOTIFY runtimeStatusChanged)
 
 public:
     explicit PermissionClient(QObject *parent = nullptr);
 
     Q_INVOKABLE void refreshApps();
+    Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
     Q_INVOKABLE void launchSelectedApp();
     Q_INVOKABLE void startLaunch(
@@ -40,6 +46,11 @@ public:
     QString lastResult() const;
     QString lastReason() const;
     QString nextAction() const;
+    QString launcherAvailability() const;
+    QString permissionsAvailability() const;
+    QString sessionAvailability() const;
+    QString sessionState() const;
+    QString sessionHealth() const;
 
 signals:
     void permissionPromptRequired(
@@ -53,6 +64,7 @@ signals:
     void launchStatusChanged();
     void launchResultMessageChanged();
     void statusDetailsChanged();
+    void runtimeStatusChanged();
 
 private:
     QVariantMap fetchAppInfo(const QString &appId);
@@ -80,4 +92,9 @@ private:
     QString m_nextAction;
     QString m_launchStatus;
     QString m_launchResultMessage;
+    QString m_launcherAvailability {"unknown"};
+    QString m_permissionsAvailability {"unknown"};
+    QString m_sessionAvailability {"unknown"};
+    QString m_sessionState {"unknown"};
+    QString m_sessionHealth {"unknown"};
 };

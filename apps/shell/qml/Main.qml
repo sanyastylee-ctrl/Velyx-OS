@@ -13,7 +13,17 @@ ApplicationWindow {
     color: settingsClient.theme === "light" ? "#eef2f7" : Theme.windowBg
     title: "Velyx Shell MVP"
 
-    Component.onCompleted: permissionClient.refreshApps()
+    Component.onCompleted: {
+        permissionClient.refreshRuntimeStatus()
+        permissionClient.refreshApps()
+    }
+
+    Timer {
+        interval: 3000
+        running: true
+        repeat: true
+        onTriggered: permissionClient.refreshRuntimeStatus()
+    }
 
     PermissionDialog {
         id: permissionDialog
@@ -107,11 +117,56 @@ ApplicationWindow {
 
     Card {
         anchors.top: parent.top
-        anchors.topMargin: 220
+        anchors.topMargin: 184
+        anchors.left: parent.left
+        anchors.leftMargin: 72
+        anchors.right: parent.right
+        anchors.rightMargin: 72
+        height: 88
+
+        RowLayout {
+            anchors.fill: parent
+            spacing: Theme.space4
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Launcher"
+                subtitle: permissionClient.launcherAvailability
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Permissions"
+                subtitle: permissionClient.permissionsAvailability
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Session"
+                subtitle: permissionClient.sessionAvailability
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Session state"
+                subtitle: permissionClient.sessionState
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Session health"
+                subtitle: permissionClient.sessionHealth
+            }
+        }
+    }
+
+    Card {
+        anchors.top: parent.top
+        anchors.topMargin: 292
         anchors.left: parent.left
         anchors.leftMargin: 72
         width: 360
-        height: 520
+        height: 448
 
         ColumnLayout {
             anchors.fill: parent
@@ -187,11 +242,11 @@ ApplicationWindow {
 
     Card {
         anchors.top: parent.top
-        anchors.topMargin: 220
+        anchors.topMargin: 292
         anchors.left: parent.left
         anchors.leftMargin: 468
         width: 380
-        height: 520
+        height: 448
 
         ColumnLayout {
             anchors.fill: parent
@@ -222,6 +277,14 @@ ApplicationWindow {
                 title: "Executable path"
                 subtitle: permissionClient.selectedAppInfo.executable_path ? permissionClient.selectedAppInfo.executable_path : "-"
             }
+            ListRow {
+                title: "Last launch"
+                subtitle: permissionClient.selectedAppInfo.last_launch_status ? permissionClient.selectedAppInfo.last_launch_status : "-"
+            }
+            ListRow {
+                title: "Last pid"
+                subtitle: permissionClient.selectedAppInfo.last_pid ? permissionClient.selectedAppInfo.last_pid : "-"
+            }
 
             Item { Layout.fillHeight: true }
 
@@ -248,11 +311,11 @@ ApplicationWindow {
 
     Card {
         anchors.top: parent.top
-        anchors.topMargin: 220
+        anchors.topMargin: 292
         anchors.right: parent.right
         anchors.rightMargin: 72
         width: 420
-        height: 520
+        height: 448
 
         ColumnLayout {
             anchors.fill: parent
@@ -303,7 +366,8 @@ ApplicationWindow {
                             : "Здесь появится результат launch/permission flow."
                         color: permissionClient.launchStatus === "denied"
                             ? Theme.danger
-                            : (permissionClient.launchStatus === "allowed"
+                            : ((permissionClient.launchStatus === "allowed"
+                                || permissionClient.launchStatus === "launched")
                                ? Theme.accentStrong
                                : Theme.textPrimary)
                         font.pixelSize: 14

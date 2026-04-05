@@ -14,6 +14,9 @@ constexpr auto kPermissionsInterface = "com.velyx.Permissions1";
 constexpr auto kLauncherService = "com.velyx.Launcher";
 constexpr auto kLauncherPath = "/com/velyx/Launcher";
 constexpr auto kLauncherInterface = "com.velyx.Launcher1";
+constexpr auto kSessionManagerService = "com.velyx.SessionManager";
+constexpr auto kSessionManagerPath = "/com/velyx/SessionManager";
+constexpr auto kSessionManagerInterface = "com.velyx.SessionManager1";
 
 QString permissionDisplayName(const QString &permission)
 {
@@ -83,12 +86,43 @@ QString PermissionClient::nextAction() const
     return m_nextAction;
 }
 
+QString PermissionClient::launcherAvailability() const
+{
+    return m_launcherAvailability;
+}
+
+QString PermissionClient::permissionsAvailability() const
+{
+    return m_permissionsAvailability;
+}
+
+QString PermissionClient::sessionAvailability() const
+{
+    return m_sessionAvailability;
+}
+
+QString PermissionClient::sessionState() const
+{
+    return m_sessionState;
+}
+
+QString PermissionClient::sessionHealth() const
+{
+    return m_sessionHealth;
+}
+
 void PermissionClient::refreshApps()
 {
+    refreshRuntimeStatus();
+
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     if (!launcher.isValid()) {
         updateLaunchState("error", "launcher-service недоступен");
         updateStatusDetails("list_apps", "error", "launcher_unavailable", "retry");
+        if (!m_apps.isEmpty()) {
+            m_apps.clear();
+            emit appsChanged();
+        }
         return;
     }
 
@@ -114,6 +148,67 @@ void PermissionClient::refreshApps()
 
     if (!m_apps.isEmpty() && m_selectedAppInfo.isEmpty()) {
         selectApp(m_apps.constFirst().toMap().value("app_id").toString());
+    }
+}
+
+void PermissionClient::refreshRuntimeStatus()
+{
+    bool changed = false;
+
+    const QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
+    const QString launcherState = launcher.isValid() ? "available" : "unavailable";
+    if (m_launcherAvailability != launcherState) {
+        m_launcherAvailability = launcherState;
+        changed = true;
+    }
+
+    const QDBusInterface permissions(
+        kPermissionsService,
+        kPermissionsPath,
+        kPermissionsInterface,
+        QDBusConnection::sessionBus());
+    const QString permissionsState = permissions.isValid() ? "available" : "unavailable";
+    if (m_permissionsAvailability != permissionsState) {
+        m_permissionsAvailability = permissionsState;
+        changed = true;
+    }
+
+    const QDBusInterface sessionManager(
+        kSessionManagerService,
+        kSessionManagerPath,
+        kSessionManagerInterface,
+        QDBusConnection::sessionBus());
+    const QString sessionAvailability = sessionManager.isValid() ? "available" : "unavailable";
+    if (m_sessionAvailability != sessionAvailability) {
+        m_sessionAvailability = sessionAvailability;
+        changed = true;
+    }
+
+    QString sessionState = "unknown";
+    QString sessionHealth = "unknown";
+    if (sessionManager.isValid()) {
+        QDBusReply<QVariantMap> reply = sessionManager.call("GetSessionStatus");
+        if (reply.isValid()) {
+            const QVariantMap payload = reply.value();
+            sessionState = payload.value("state", "unknown").toString();
+            sessionHealth = payload.value("health", "unknown").toString();
+        } else {
+            sessionState = "error";
+            sessionHealth = "error";
+        }
+    }
+
+    if (m_sessionState != sessionState) {
+        m_sessionState = sessionState;
+        changed = true;
+    }
+    if (m_sessionHealth != sessionHealth) {
+        m_sessionHealth = sessionHealth;
+        changed = true;
+    }
+
+    if (changed) {
+        emit runtimeStatusChanged();
     }
 }
 
@@ -184,6 +279,7 @@ void PermissionClient::requestLaunchFromLauncher(
     if (!launcher.isValid()) {
         updateLaunchState("error", "launcher-service недоступен");
         updateStatusDetails("launch_requested", "error", "launcher_unavailable", "retry");
+        refreshRuntimeStatus();
         return;
     }
 
@@ -191,6 +287,7 @@ void PermissionClient::requestLaunchFromLauncher(
     if (!launchReply.isValid()) {
         updateLaunchState("error", "Не удалось выполнить запрос к secure launcher");
         updateStatusDetails("launch_requested", "error", "launch_call_failed", "retry");
+        refreshRuntimeStatus();
         return;
     }
 
@@ -249,6 +346,7 @@ void PermissionClient::submitDecision(
     if (!permissions.isValid()) {
         updateLaunchState("error", "permissions-service недоступен");
         updateStatusDetails("store_decision", "error", "permissions_unavailable", "retry");
+        refreshRuntimeStatus();
         return;
     }
 
@@ -282,6 +380,7 @@ void PermissionClient::resetPermissions(const QString &appId)
     if (!permissions.isValid()) {
         updateLaunchState("error", "permissions-service недоступен");
         updateStatusDetails("reset_permissions", "error", "permissions_unavailable", "retry");
+        refreshRuntimeStatus();
         return;
     }
 
