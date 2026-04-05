@@ -238,21 +238,52 @@ impl LauncherApi {
             permission_context: permission_context.clone(),
             launched_by,
         };
+        let _ = self.audit.log_process_spawn(
+            app_id,
+            "process_spawn_begin",
+            "pending",
+            &format!(
+                "profile={} executable={}",
+                manifest.sandbox_profile, manifest.executable_path
+            ),
+        );
 
         let launched = match SandboxRunner::launch(&request) {
             Ok(launched) => launched,
             Err(err) => {
+                let _ = self.audit.log_process_spawn(
+                    app_id,
+                    "process_spawn_failed",
+                    "failed",
+                    &err,
+                );
                 let _ = self.audit.log_launch_history(
                     app_id,
                     "launch_denied",
                     manifest.trust_level.as_str(),
-                    "deny",
+                    "failed",
                     &manifest.sandbox_profile,
                     &format!("sandbox_error:{err}"),
                 );
-                return Err(zbus::fdo::Error::Failed(format!("sandbox launch failed: {err}")));
+                return Ok(Self::build_terminal_payload(
+                    "failed",
+                    &format!("Запуск {} завершился ошибкой: {}", app_id, err),
+                    app_id,
+                    "",
+                    "process_spawn_failed",
+                    "inspect_failure_reason",
+                ));
             }
         };
+        let _ = self.audit.log_process_spawn(
+            app_id,
+            "process_spawn_ok",
+            "launched",
+            &format!(
+                "pid={} sandbox_id={}",
+                launched.identity.pid, launched.identity.sandbox_id
+            ),
+        );
         let permission_summary = permission_context
             .iter()
             .map(|(permission, decision)| format!("{permission}={decision}"))
@@ -273,7 +304,7 @@ impl LauncherApi {
         }
 
         let mut payload = HashMap::new();
-        payload.insert("status".to_string(), "started".to_string());
+        payload.insert("status".to_string(), "launched".to_string());
         payload.insert(
             "message".to_string(),
             format!(
@@ -288,11 +319,13 @@ impl LauncherApi {
         payload.insert("required_permission".to_string(), String::new());
         payload.insert("reason".to_string(), "all_permissions_satisfied".to_string());
         payload.insert("next_action".to_string(), "none".to_string());
+        payload.insert("pid".to_string(), launched.identity.pid.to_string());
+        payload.insert("launched_at".to_string(), launched.identity.launch_time.clone());
+        payload.insert("launch_status".to_string(), launched.identity.launch_status.clone());
         payload.insert("sandbox".to_string(), "bwrap".to_string());
         payload.insert("sandbox_profile".to_string(), manifest.sandbox_profile.clone());
         payload.insert("trust_level".to_string(), manifest.trust_level.as_str().to_string());
         payload.insert("launched_by".to_string(), launched.identity.launched_by.clone());
-        payload.insert("pid".to_string(), launched.identity.pid.to_string());
         payload.insert("sandbox_id".to_string(), launched.identity.sandbox_id.clone());
         payload.insert("runtime_path".to_string(), launched.runtime_path);
         payload.insert("mounts".to_string(), launched.applied_mounts.join("|"));
@@ -310,6 +343,11 @@ impl LauncherApi {
             "running_instances".to_string(),
             tracker.running_for_app(app_id).to_string(),
         );
+        if let Some(identity) = tracker.latest_for_app(app_id) {
+            payload.insert("last_pid".to_string(), identity.pid.to_string());
+            payload.insert("last_launched_at".to_string(), identity.launch_time.clone());
+            payload.insert("last_launch_status".to_string(), identity.launch_status.clone());
+        }
         Ok(payload)
     }
 
@@ -322,6 +360,11 @@ impl LauncherApi {
                 "running_instances".to_string(),
                 tracker.running_for_app(&manifest.app_id).to_string(),
             );
+            if let Some(identity) = tracker.latest_for_app(&manifest.app_id) {
+                payload.insert("last_pid".to_string(), identity.pid.to_string());
+                payload.insert("last_launched_at".to_string(), identity.launch_time.clone());
+                payload.insert("last_launch_status".to_string(), identity.launch_status.clone());
+            }
             apps.push(payload);
         }
         Ok(apps)

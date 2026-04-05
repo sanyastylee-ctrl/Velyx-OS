@@ -53,7 +53,7 @@ impl LauncherAuditLogger {
         self.write_line(
             &self.sandbox_path,
             &format!(
-                "{} app_id={} profile={} mounts={} permission_context={} launched_by={} pid={} sandbox_id={} result={}",
+                "{} app_id={} profile={} mounts={} permission_context={} launched_by={} pid={} launch_status={} sandbox_id={} result={}",
                 Self::now(),
                 result.identity.app_id,
                 result.identity.sandbox_profile,
@@ -61,8 +61,29 @@ impl LauncherAuditLogger {
                 permission_context,
                 result.identity.launched_by,
                 result.identity.pid,
+                result.identity.launch_status,
                 result.identity.sandbox_id,
                 launch_result
+            ),
+        )
+    }
+
+    pub fn log_process_spawn(
+        &self,
+        app_id: &str,
+        stage: &str,
+        result: &str,
+        details: &str,
+    ) -> Result<(), String> {
+        self.write_line(
+            &self.history_path,
+            &format!(
+                "{} app_id={} action={} result={} details={}",
+                Self::now(),
+                app_id,
+                stage,
+                result,
+                details
             ),
         )
     }

@@ -58,6 +58,7 @@ pub struct ProcessIdentity {
     pub app_id: String,
     pub sandbox_profile: String,
     pub launch_time: String,
+    pub launch_status: String,
     pub sandbox_id: String,
     pub launched_by: String,
 }
@@ -210,6 +211,7 @@ impl SandboxRunner {
                 app_id: request.app_id.clone(),
                 sandbox_profile: policy.profile_name,
                 launch_time: Utc::now().to_rfc3339(),
+                launch_status: "launched".to_string(),
                 sandbox_id,
                 launched_by: request.launched_by.clone(),
             },

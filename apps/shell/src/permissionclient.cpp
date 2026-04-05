@@ -198,15 +198,25 @@ void PermissionClient::requestLaunchFromLauncher(
     const QString status = payload.value("status").toString();
     const QString reason = payload.value("reason").toString();
     const QString nextAction = payload.value("next_action").toString();
-    if (status == "started") {
+    if (status == "launched" || status == "started") {
         updateStatusDetails("launch_allowed", status, reason, nextAction);
-        handleAllowedLaunch(payload.value("message").toString());
+        const QString message = payload.value("pid").toString().isEmpty()
+            ? payload.value("message").toString()
+            : QString("%1 (pid=%2)")
+                  .arg(payload.value("message").toString(), payload.value("pid").toString());
+        handleAllowedLaunch(message);
         return;
     }
 
     if (status == "deny") {
         updateStatusDetails("launch_denied", status, reason, nextAction);
         handleDeniedLaunch(appName, permissionDisplayName(permission));
+        return;
+    }
+
+    if (status == "failed") {
+        updateLaunchState("error", payload.value("message").toString());
+        updateStatusDetails("launch_failed", status, reason, nextAction);
         return;
     }
 

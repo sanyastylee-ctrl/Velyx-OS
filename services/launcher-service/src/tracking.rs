@@ -17,4 +17,11 @@ impl ProcessTracker {
             .filter(|identity| identity.app_id == app_id)
             .count()
     }
+
+    pub fn latest_for_app(&self, app_id: &str) -> Option<&ProcessIdentity> {
+        self.processes
+            .values()
+            .filter(|identity| identity.app_id == app_id)
+            .max_by_key(|identity| identity.launch_time.as_str())
+    }
 }
