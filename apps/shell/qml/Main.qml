@@ -7,15 +7,13 @@ import Velyx.UI
 ApplicationWindow {
     id: window
 
-    width: 1440
-    height: 900
+    width: 1360
+    height: 880
     visible: true
     color: settingsClient.theme === "light" ? "#eef2f7" : Theme.windowBg
-    title: "Velyx Shell"
+    title: "Velyx Shell MVP"
 
-    property bool launcherOpen: true
-    property bool quickSettingsOpen: false
-    property bool aiOverlayOpen: true
+    Component.onCompleted: permissionClient.refreshApps()
 
     PermissionDialog {
         id: permissionDialog
@@ -31,20 +29,6 @@ ApplicationWindow {
         }
     }
 
-    AIConfirmationDialog {
-        id: aiConfirmationDialog
-
-        onConfirmAccepted: function() {
-            close()
-            aiClient.confirmPendingAction(true)
-        }
-
-        onConfirmRejected: function() {
-            close()
-            aiClient.confirmPendingAction(false)
-        }
-    }
-
     Connections {
         target: permissionClient
 
@@ -55,23 +39,6 @@ ApplicationWindow {
             permissionDialog.permissionDisplayName = permissionDisplayName
             permissionDialog.explanation = explanation
             permissionDialog.open()
-        }
-    }
-
-    Connections {
-        target: aiClient
-
-        function onConfirmationChanged() {
-            if (aiClient.confirmationPending) {
-                aiConfirmationDialog.summary = aiClient.confirmationSummary
-                aiConfirmationDialog.detailedReason = aiClient.confirmationDetails
-                aiConfirmationDialog.riskLevel = aiClient.confirmationRisk
-                aiConfirmationDialog.affectedApp = aiClient.confirmationApp
-                aiConfirmationDialog.affectedPermission = aiClient.confirmationPermission
-                aiConfirmationDialog.open()
-            } else {
-                aiConfirmationDialog.close()
-            }
         }
     }
 
@@ -124,8 +91,9 @@ ApplicationWindow {
         anchors.top: parent.top
         anchors.topMargin: 72
         anchors.horizontalCenter: parent.horizontalCenter
-        width: 520
-        placeholderText: "Поиск приложений, файлов, настроек и действий"
+        width: 560
+        placeholderText: "Это MVP launcher shell: выберите приложение и проверьте permission flow"
+        readOnly: true
     }
 
     SectionHeader {
@@ -133,160 +101,84 @@ ApplicationWindow {
         anchors.topMargin: 140
         anchors.left: parent.left
         anchors.leftMargin: 72
-        title: "Прототип сессии Velyx OS"
-        subtitle: "Shell остается тонким слоем, а критичная логика уходит в сервисы."
+        title: "Velyx Shell MVP"
+        subtitle: "Минимальный графический клиент для launcher-service и permissions-service"
     }
 
     Card {
         anchors.top: parent.top
-        anchors.topMargin: 240
+        anchors.topMargin: 220
         anchors.left: parent.left
         anchors.leftMargin: 72
-        width: 500
-        height: 300
+        width: 360
+        height: 520
 
         ColumnLayout {
             anchors.fill: parent
             spacing: Theme.space4
 
             Label {
-                text: "Приоритеты"
+                text: "Список приложений"
                 color: Theme.textSecondary
                 font.pixelSize: 12
             }
 
-            Label {
-                text: "Безопасность, ясность, восстановление."
-                wrapMode: Text.WordWrap
-                color: Theme.textPrimary
-                font.family: Theme.fontDisplay
-                font.pixelSize: 28
-                font.weight: Font.DemiBold
-            }
-
-            Label {
-                text: "Shell должен быстро запускать сценарии пользователя, но не тащить в себя update, permissions или compatibility-логику."
-                wrapMode: Text.WordWrap
-                color: Theme.textSecondary
-                font.pixelSize: 14
-            }
-
-            Item { Layout.fillHeight: true }
-
             RowLayout {
+                Layout.fillWidth: true
                 spacing: Theme.space3
 
                 Button {
-                    text: "Лаунчер"
-                    onClicked: window.launcherOpen = !window.launcherOpen
-                }
-
-                Button {
-                    text: "Быстрые настройки"
-                    onClicked: window.quickSettingsOpen = !window.quickSettingsOpen
-                }
-
-                Button {
-                    text: "Velyx AI"
-                    onClicked: window.aiOverlayOpen = !window.aiOverlayOpen
+                    text: "Обновить"
+                    onClicked: permissionClient.refreshApps()
                 }
             }
 
-            Button {
-                text: "Открыть тестовое приложение"
-                onClicked: permissionClient.startLaunch(
-                    "com.velyx.testapp",
-                    "Тестовое приложение",
-                    "filesystem")
-            }
-
-            Label {
+            ListView {
                 Layout.fillWidth: true
-                wrapMode: Text.WordWrap
-                text: permissionClient.launchResultMessage.length > 0
-                    ? permissionClient.launchResultMessage
-                    : "Здесь появится результат security flow."
-                color: permissionClient.launchStatus === "denied"
-                    ? Theme.danger
-                    : (permissionClient.launchStatus === "allowed" ? Theme.accentStrong : Theme.textSecondary)
-                font.pixelSize: 13
-            }
-        }
-    }
-
-    Card {
-        anchors.top: parent.top
-        anchors.topMargin: 240
-        anchors.right: parent.right
-        anchors.rightMargin: 72
-        width: 520
-        height: 360
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: Theme.space3
-
-            SectionHeader {
-                title: "Опорные подсистемы"
-                subtitle: "Что shell будет вызывать через сервисные границы"
-            }
-
-            ListRow { title: "Notifications"; subtitle: "Отдельный сервис и журнал событий"; trailingText: "M2" }
-            ListRow { title: "Permissions"; subtitle: "Privacy dashboard и consent flows"; trailingText: "M2" }
-            ListRow { title: "Updates"; subtitle: "Проверка, staged apply, rollback"; trailingText: "M2" }
-            ListRow { title: "Compatibility"; subtitle: "Управляемый запуск Windows-приложений"; trailingText: "M3" }
-        }
-    }
-
-    AIOverlay {
-        visible: window.aiOverlayOpen
-        anchors.top: parent.top
-        anchors.topMargin: 620
-        anchors.left: parent.left
-        anchors.leftMargin: 72
-        width: 620
-        height: 220
-        understoodIntent: aiClient.understoodIntent
-        selectedTool: aiClient.selectedTool
-        resultText: aiClient.resultText
-        explanationSource: aiClient.explanationSource
-        suggestedAction: aiClient.suggestedAction
-        onSubmitCommand: function(text) {
-            aiClient.submitCommand(text)
-        }
-    }
-
-    Rectangle {
-        anchors.bottom: parent.bottom
-        anchors.horizontalCenter: parent.horizontalCenter
-        anchors.bottomMargin: 20
-        width: 620
-        height: 82
-        radius: 28
-        color: "#182031"
-        border.color: Theme.strokeSubtle
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.margins: Theme.space4
-            spacing: Theme.space4
-
-            Repeater {
-                model: ["Пуск", "Браузер", "Файлы", "Настройки", "Store", "Steam"]
+                Layout.fillHeight: true
+                clip: true
+                spacing: Theme.space3
+                model: permissionClient.apps
 
                 delegate: Rectangle {
-                    Layout.preferredWidth: 88
-                    Layout.fillHeight: true
-                    radius: 20
-                    color: index === 0 ? Theme.surface3 : "transparent"
-                    border.width: index === 0 ? 1 : 0
+                    required property var modelData
+                    width: ListView.view.width
+                    height: 78
+                    radius: 18
+                    color: permissionClient.selectedAppId === modelData.app_id ? Theme.surface3 : Theme.surface2
+                    border.width: 1
                     border.color: Theme.strokeSubtle
 
-                    Label {
-                        anchors.centerIn: parent
-                        text: modelData
-                        color: Theme.textPrimary
-                        font.pixelSize: 12
+                    MouseArea {
+                        anchors.fill: parent
+                        onClicked: permissionClient.selectApp(parent.modelData.app_id)
+                    }
+
+                    Column {
+                        anchors.fill: parent
+                        anchors.margins: 16
+                        spacing: 6
+
+                        Label {
+                            text: parent.parent.modelData.display_name.length > 0
+                                ? parent.parent.modelData.display_name
+                                : parent.parent.modelData.app_id
+                            color: Theme.textPrimary
+                            font.pixelSize: 16
+                            font.weight: Font.DemiBold
+                        }
+
+                        Label {
+                            text: parent.parent.modelData.app_id
+                            color: Theme.textSecondary
+                            font.pixelSize: 12
+                        }
+
+                        Label {
+                            text: "trust=" + parent.parent.modelData.trust_level
+                            color: Theme.textMuted
+                            font.pixelSize: 11
+                        }
                     }
                 }
             }
@@ -294,83 +186,129 @@ ApplicationWindow {
     }
 
     Card {
-        visible: window.launcherOpen
+        anchors.top: parent.top
+        anchors.topMargin: 220
         anchors.left: parent.left
-        anchors.leftMargin: 72
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 120
-        width: 420
-        height: 360
-        fillColor: "#171d2b"
+        anchors.leftMargin: 468
+        width: 380
+        height: 520
 
         ColumnLayout {
             anchors.fill: parent
-            spacing: Theme.space4
+            spacing: Theme.space3
 
             SectionHeader {
-                title: "Лаунчер"
-                subtitle: "Поиск и входные точки системы"
+                title: "Информация о приложении"
+                subtitle: "GetAppInfo(app_id)"
             }
 
-            SearchField {
-                Layout.fillWidth: true
-                placeholderText: "Поиск приложений, файлов, команд"
+            ListRow {
+                title: "App ID"
+                subtitle: permissionClient.selectedAppInfo.app_id ? permissionClient.selectedAppInfo.app_id : "Не выбрано"
+            }
+            ListRow {
+                title: "Display name"
+                subtitle: permissionClient.selectedAppInfo.display_name ? permissionClient.selectedAppInfo.display_name : "Не выбрано"
+            }
+            ListRow {
+                title: "Trust level"
+                subtitle: permissionClient.selectedAppInfo.trust_level ? permissionClient.selectedAppInfo.trust_level : "-"
+            }
+            ListRow {
+                title: "Required permissions"
+                subtitle: permissionClient.selectedAppInfo.requested_permissions ? permissionClient.selectedAppInfo.requested_permissions : "-"
+            }
+            ListRow {
+                title: "Executable path"
+                subtitle: permissionClient.selectedAppInfo.executable_path ? permissionClient.selectedAppInfo.executable_path : "-"
             }
 
-            ListRow { title: "Браузер"; subtitle: "Закреплено" }
-            ListRow { title: "Файлы"; subtitle: "Недавнее" }
-            ListRow { title: "Настройки"; subtitle: "Результат по запросу Дисплеи" }
-            ListRow { title: "Steam"; subtitle: "Установлено" }
+            Item { Layout.fillHeight: true }
 
             RowLayout {
                 Layout.fillWidth: true
                 spacing: Theme.space3
 
                 Button {
-                    text: "Запустить com.velyx.files"
-                    onClicked: permissionClient.startLaunch(
-                        "com.velyx.files",
-                        "Файлы",
-                        "filesystem")
+                    Layout.fillWidth: true
+                    text: "Launch"
+                    enabled: permissionClient.selectedAppId.length > 0
+                    onClicked: permissionClient.launchSelectedApp()
                 }
 
                 Button {
-                    text: "Сбросить решения"
-                    onClicked: permissionClient.resetPermissions("com.velyx.testapp")
+                    Layout.fillWidth: true
+                    text: "Reset permissions"
+                    enabled: permissionClient.selectedAppId.length > 0
+                    onClicked: permissionClient.resetPermissions(permissionClient.selectedAppId)
                 }
             }
         }
     }
 
     Card {
-        visible: window.quickSettingsOpen
         anchors.top: parent.top
-        anchors.topMargin: 72
+        anchors.topMargin: 220
         anchors.right: parent.right
-        anchors.rightMargin: 28
-        width: 340
-        height: 420
-        fillColor: "#171d2b"
+        anchors.rightMargin: 72
+        width: 420
+        height: 520
 
         ColumnLayout {
             anchors.fill: parent
-            spacing: Theme.space4
+            spacing: Theme.space3
 
             SectionHeader {
-                title: "Быстрые настройки"
-                subtitle: "Точка входа в централизованные системные действия"
+                title: "Статус и результат"
+                subtitle: "Последний backend action/result"
             }
 
-            ListRow { title: "Wi-Fi"; subtitle: "Office-5G"; trailingText: "Подключено" }
-            ListRow { title: "Bluetooth"; subtitle: "Клавиатура, наушники"; trailingText: "2 устройства" }
-            ListRow { title: "Звук"; subtitle: "Динамики"; trailingText: "68%" }
-            ListRow { title: "Режим фокуса"; subtitle: "Уведомления ограничены"; trailingText: "Выкл." }
+            ListRow {
+                title: "Last action"
+                subtitle: permissionClient.lastAction.length > 0 ? permissionClient.lastAction : "-"
+            }
+            ListRow {
+                title: "Last result"
+                subtitle: permissionClient.lastResult.length > 0 ? permissionClient.lastResult : "-"
+            }
+            ListRow {
+                title: "Reason"
+                subtitle: permissionClient.lastReason.length > 0 ? permissionClient.lastReason : "-"
+            }
+            ListRow {
+                title: "Next action"
+                subtitle: permissionClient.nextAction.length > 0 ? permissionClient.nextAction : "-"
+            }
 
-            Item { Layout.fillHeight: true }
+            Card {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                fillColor: Theme.surface2
 
-            Button {
-                text: "Закрыть"
-                onClicked: window.quickSettingsOpen = false
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: Theme.space3
+
+                    Label {
+                        text: "Last message"
+                        color: Theme.textMuted
+                        font.pixelSize: 12
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        wrapMode: Text.WordWrap
+                        text: permissionClient.launchResultMessage.length > 0
+                            ? permissionClient.launchResultMessage
+                            : "Здесь появится результат launch/permission flow."
+                        color: permissionClient.launchStatus === "denied"
+                            ? Theme.danger
+                            : (permissionClient.launchStatus === "allowed"
+                               ? Theme.accentStrong
+                               : Theme.textPrimary)
+                        font.pixelSize: 14
+                    }
+                }
             }
         }
     }
