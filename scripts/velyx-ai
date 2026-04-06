@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import urllib.error
@@ -99,6 +100,47 @@ def json_hash(payload: dict) -> str:
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
 
 
+def png_dimensions(path: Path) -> tuple[int, int]:
+    if not path.exists():
+        return 0, 0
+    with path.open("rb") as handle:
+        signature = handle.read(8)
+        if signature != b"\x89PNG\r\n\x1a\n":
+            return 0, 0
+        handle.read(4)
+        if handle.read(4) != b"IHDR":
+            return 0, 0
+        width, height = struct.unpack(">II", handle.read(8))
+        return int(width), int(height)
+
+
+def image_metadata(path_text: str) -> dict:
+    path = Path(path_text)
+    width, height = png_dimensions(path)
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "width": width,
+        "height": height,
+        "size_bytes": path.stat().st_size if path.exists() else 0,
+    }
+
+
+def compare_images(before_text: str, after_text: str) -> dict:
+    before = image_metadata(before_text) if before_text else {"path": "", "exists": False, "width": 0, "height": 0, "size_bytes": 0}
+    after = image_metadata(after_text)
+    changed = False
+    if before.get("exists") and after.get("exists"):
+        changed = Path(before_text).read_bytes() != Path(after_text).read_bytes()
+    return {
+        "before": before,
+        "after": after,
+        "changed": changed,
+        "same_dimensions": before.get("width") == after.get("width") and before.get("height") == after.get("height"),
+        "size_delta_bytes": after.get("size_bytes", 0) - before.get("size_bytes", 0),
+    }
+
+
 def ensure_config() -> dict:
     payload = read_json(AI_CONFIG, {})
     defaults = {
@@ -151,6 +193,7 @@ def ensure_state(config: dict) -> dict:
         "last_context_snapshot": {},
         "last_trigger": "",
         "last_suggestion_result": "",
+        "last_visual_analysis": {},
     }
     changed = False
     for key, value in defaults.items():
@@ -917,6 +960,74 @@ class AiEngine:
         log_event("ai_suggestion_dismissed", "ok", f"blocked_type={action_type}")
         return f"Suggestion type blocked: {action_type}"
 
+    def visual_analyze(self, image_path: str, request: str = "", change_summary: str = "", previous_path: str = "") -> str:
+        effective_config, route = self._effective_config_for_task("general_assistant")
+        self._update_model_availability(effective_config, route)
+        image_info = image_metadata(image_path)
+        if not image_info.get("exists"):
+            raise RuntimeError(f"Screenshot not found: {image_path}")
+        comparison = compare_images(previous_path, image_path) if previous_path else {
+            "before": {"path": "", "exists": False, "width": 0, "height": 0, "size_bytes": 0},
+            "after": image_info,
+            "changed": True,
+            "same_dimensions": True,
+            "size_delta_bytes": 0,
+        }
+        log_event("ai_visual_analysis_begin", "started", f"path={image_path}")
+
+        lowered = request.lower()
+        summary = "Visual feedback captured."
+        recommendation = "No further automatic refinement is recommended yet."
+        refinement_request = ""
+        issues = []
+        confidence = 0.58
+        safe_to_auto_run = False
+
+        if not comparison.get("changed", True):
+            summary = "The screenshot did not show a visible change compared with the previous frame."
+            recommendation = "Try a stronger spacing or size adjustment before another visual pass."
+            issues.append("visual_delta_not_detected")
+            confidence = 0.81
+        elif any(token in lowered for token in ["compact", "smaller", "кноп", "button", "компакт", "меньше"]):
+            summary = "The controls look more compact, but the assistant action area can still be tightened."
+            recommendation = "Reduce spacing between assistant quick actions by another small step."
+            refinement_request = "Reduce spacing between assistant quick actions"
+            issues.append("assistant_actions_still_roomy")
+            confidence = 0.73
+            safe_to_auto_run = True
+        elif any(token in lowered for token in ["panel", "панель", "right", "вправ"]):
+            summary = "The panel balance changed, and the right rail now reads more prominently."
+            recommendation = "Keep this width for now and review card spacing before another automatic refinement."
+            issues.append("right_rail_needs_manual_review")
+            confidence = 0.62
+        else:
+            summary = "The shell screenshot looks stable after the last UI patch."
+            recommendation = "Review the screenshot pair and apply another refinement only if the hierarchy still feels off."
+            confidence = 0.55
+
+        analysis = {
+            "status": "ok",
+            "summary": summary,
+            "recommendation": recommendation,
+            "recommended_refinement_request": refinement_request,
+            "issues": issues,
+            "confidence": confidence,
+            "safe_to_auto_run": safe_to_auto_run,
+            "comparison": comparison,
+            "image": image_info,
+            "request": request,
+            "change_summary": change_summary,
+            "model_route": route,
+            "user_message": summary + (" " + recommendation if recommendation else ""),
+        }
+        self.state["last_visual_analysis"] = analysis
+        self.state["last_run_at"] = now_iso()
+        self.state["current_model"] = effective_config.get("model_name", "")
+        self.state["current_model_profile"] = route.get("selected_profile", "")
+        self._save_state()
+        log_event("ai_visual_analysis_ok", "ok", f"path={image_path} recommendation={refinement_request or 'none'}")
+        return json.dumps(analysis, ensure_ascii=False, indent=2)
+
     def set_mode(self, mode: str) -> str:
         if mode not in {"off", "suggest", "auto"}:
             raise RuntimeError(f"Unsupported AI mode: {mode}")
@@ -949,6 +1060,7 @@ class AiEngine:
                 "routing_reason": self.state.get("last_routing_reason", ""),
                 "fallback_reason": self.state.get("last_fallback_reason", ""),
                 "last_suggestion_result": self.state.get("last_suggestion_result", ""),
+                "last_visual_summary": self.state.get("last_visual_analysis", {}).get("summary", ""),
                 "last_error": self.state.get("last_error", ""),
             },
             ensure_ascii=False,
@@ -989,7 +1101,7 @@ class AiEngine:
 
 def usage() -> int:
     print(
-        "usage: velyx-ai status | mode | set-mode off|suggest|auto | summary | explain | suggest | tick | run-last-suggestion | dismiss-last-suggestion | block-last-suggestion | export-training-data [path] | config | ping-model",
+        "usage: velyx-ai status | mode | set-mode off|suggest|auto | summary | explain | suggest | visual-analyze <image_path> [--request text] [--change-summary text] [--previous path] | tick | run-last-suggestion | dismiss-last-suggestion | block-last-suggestion | export-training-data [path] | config | ping-model",
         file=sys.stderr,
     )
     return 1
@@ -1017,6 +1129,29 @@ def main() -> int:
             print(engine.explain())
         elif command == "suggest":
             print(engine.suggest(trigger="manual", manual=True))
+        elif command == "visual-analyze":
+            if len(sys.argv) < 3:
+                return usage()
+            image_path = sys.argv[2]
+            request = ""
+            change_summary = ""
+            previous = ""
+            index = 3
+            while index < len(sys.argv):
+                if sys.argv[index] == "--request" and index + 1 < len(sys.argv):
+                    request = sys.argv[index + 1]
+                    index += 2
+                    continue
+                if sys.argv[index] == "--change-summary" and index + 1 < len(sys.argv):
+                    change_summary = sys.argv[index + 1]
+                    index += 2
+                    continue
+                if sys.argv[index] == "--previous" and index + 1 < len(sys.argv):
+                    previous = sys.argv[index + 1]
+                    index += 2
+                    continue
+                index += 1
+            print(engine.visual_analyze(image_path, request=request, change_summary=change_summary, previous_path=previous))
         elif command == "tick":
             print(engine.tick())
         elif command == "run-last-suggestion":

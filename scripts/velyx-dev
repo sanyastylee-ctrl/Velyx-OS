@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import struct
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -37,6 +38,7 @@ DEV_LOG = STATE_DIR / "dev_mode.log"
 OVERLAY_ROOT = STATE_DIR / "dev_overlay"
 OVERLAY_HISTORY = STATE_DIR / "dev_overlay_history"
 OVERLAY_SNAPSHOTS = STATE_DIR / "dev_overlay_snapshots"
+SCREENSHOT_ROOT = STATE_DIR / "dev_screenshots"
 BASE_SHELL_QML = ROOT_DIR / "apps" / "shell" / "qml"
 BASE_SHELL_SRC = ROOT_DIR / "apps" / "shell" / "src"
 BASE_THEME = ROOT_DIR / "packages" / "design-system" / "qml" / "Velyx" / "DesignSystem" / "Theme.qml"
@@ -46,6 +48,7 @@ ALLOWED_ROOTS = {
     "packages/design-system/qml/Velyx/DesignSystem/Theme.qml": BASE_THEME,
 }
 MAX_HISTORY = 12
+MAX_VISUAL_ITERATIONS = 2
 
 
 class DevModeError(RuntimeError):
@@ -82,9 +85,21 @@ def default_state() -> dict[str, Any]:
         "overlay_root": str(OVERLAY_ROOT),
         "source_root": str(ROOT_DIR),
         "allowed_roots": list(ALLOWED_ROOTS.keys()),
+        "visual_feedback_active": True,
+        "auto_refine": False,
+        "max_visual_iterations": MAX_VISUAL_ITERATIONS,
         "last_change_id": "",
         "last_change_summary": "",
         "last_change_files": [],
+        "last_visual_request": "",
+        "last_visual_status": "",
+        "last_visual_summary": "",
+        "last_visual_recommendation": "",
+        "pending_refinement_request": "",
+        "last_visual_iteration": 0,
+        "last_screenshot": "",
+        "previous_screenshot": "",
+        "last_comparison": {},
         "history": [],
         "updated_at": now_iso(),
     }
@@ -174,10 +189,17 @@ def status() -> dict[str, Any]:
     return {
         "enabled": bool(state.get("enabled", False)),
         "overlay_root": str(OVERLAY_ROOT),
+        "visual_feedback_active": bool(state.get("visual_feedback_active", True)),
+        "auto_refine": bool(state.get("auto_refine", False)),
         "history_entries": len(state.get("history", [])),
         "last_change_id": state.get("last_change_id", ""),
         "last_change_summary": state.get("last_change_summary", ""),
         "last_change_files": state.get("last_change_files", []),
+        "last_screenshot": state.get("last_screenshot", ""),
+        "previous_screenshot": state.get("previous_screenshot", ""),
+        "last_visual_summary": state.get("last_visual_summary", ""),
+        "last_visual_recommendation": state.get("last_visual_recommendation", ""),
+        "pending_refinement_request": state.get("pending_refinement_request", ""),
     }
 
 
@@ -254,6 +276,17 @@ def create_snapshot(summary: str = "manual snapshot") -> dict[str, Any]:
     return {"snapshot_id": snapshot_id, "path": str(destination), "summary": summary}
 
 
+def set_auto_refine(enabled: bool) -> dict[str, Any]:
+    state = ensure_state()
+    state["auto_refine"] = enabled
+    save_state(state)
+    log_event("dev_auto_refine_changed", "ok", f"enabled={enabled}")
+    return {
+        "auto_refine": enabled,
+        "summary": "Auto refine enabled." if enabled else "Auto refine disabled.",
+    }
+
+
 def ensure_enabled() -> dict[str, Any]:
     state = ensure_state()
     if not state.get("enabled", False):
@@ -277,6 +310,16 @@ def add_compact_button_markers(content: str) -> str:
         )
 
     return pattern.sub(replacer, content)
+
+
+def tighten_assistant_spacing(content: str) -> str:
+    if "// dev-mode compact-spacing" in content:
+        return content
+    updated = content.replace("spacing: 8", "spacing: 6")
+    if updated == content:
+        return content
+    marker = "Flow {\n            Layout.fillWidth: true\n            spacing: 6"
+    return updated.replace(marker, "Flow {\n            Layout.fillWidth: true\n            // dev-mode compact-spacing\n            spacing: 6", 1)
 
 
 def insert_button_after(content: str, neighbor: str, label: str) -> str:
@@ -322,6 +365,20 @@ def build_changes(request: str) -> list[dict[str, Any]]:
             {
                 "path": relative,
                 "summary": "Made assistant action buttons more compact.",
+                "before": current,
+                "after": updated,
+            }
+        )
+        return changes
+
+    if any(token in lowered for token in ["spacing", "gap", "отступ", "distance", "tighten", "compact the spacing", "разреж", "плотн"]):
+        relative = "apps/shell/qml/AssistantPanel.qml"
+        current = read_ui_file(relative)["content"]
+        updated = tighten_assistant_spacing(current)
+        changes.append(
+            {
+                "path": relative,
+                "summary": "Tightened the spacing in the assistant action area.",
                 "before": current,
                 "after": updated,
             }
@@ -431,6 +488,7 @@ def apply_request(request: str) -> dict[str, Any]:
     state["last_change_id"] = change_id
     state["last_change_summary"] = "; ".join(change["summary"] for change in changes)
     state["last_change_files"] = applied_files
+    state["last_visual_request"] = request
     save_state(state)
     log_event("dev_patch_applied", "ok", f"id={change_id} files={','.join(applied_files)}")
     return {
@@ -438,6 +496,234 @@ def apply_request(request: str) -> dict[str, Any]:
         "change_id": change_id,
         "summary": state["last_change_summary"],
         "files": applied_files,
+    }
+
+
+def screenshot_file_path(label: str = "ui") -> Path:
+    SCREENSHOT_ROOT.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return SCREENSHOT_ROOT / f"velyx_{label}_{timestamp}_{uuid.uuid4().hex[:6]}.png"
+
+
+def capture_with_linux_tools(target: Path) -> bool:
+    commands = [
+        ["grim", str(target)],
+        ["gnome-screenshot", "-f", str(target)],
+        ["scrot", str(target)],
+        ["import", "-window", "root", str(target)],
+    ]
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=8)
+        except Exception:
+            continue
+        if result.returncode == 0 and target.exists() and target.stat().st_size > 0:
+            return True
+    return False
+
+
+def capture_with_windows_tools(target: Path) -> bool:
+    script = f"""
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+$bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+$bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+$bitmap.Save('{str(target).replace("'", "''")}', [System.Drawing.Imaging.ImageFormat]::Png)
+$graphics.Dispose()
+$bitmap.Dispose()
+"""
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=8,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0 and target.exists() and target.stat().st_size > 0
+
+
+def png_dimensions(path: Path) -> tuple[int, int]:
+    with path.open("rb") as handle:
+        signature = handle.read(8)
+        if signature != b"\x89PNG\r\n\x1a\n":
+            return 0, 0
+        handle.read(4)
+        chunk = handle.read(4)
+        if chunk != b"IHDR":
+            return 0, 0
+        width, height = struct.unpack(">II", handle.read(8))
+        return int(width), int(height)
+
+
+def screenshot_metadata(path: Path) -> dict[str, Any]:
+    width, height = png_dimensions(path) if path.exists() else (0, 0)
+    return {
+        "path": str(path),
+        "width": width,
+        "height": height,
+        "size_bytes": path.stat().st_size if path.exists() else 0,
+        "mtime": path.stat().st_mtime if path.exists() else 0,
+    }
+
+
+def compare_screenshot_paths(before_path: str, after_path: str) -> dict[str, Any]:
+    before = Path(before_path)
+    after = Path(after_path)
+    before_meta = screenshot_metadata(before)
+    after_meta = screenshot_metadata(after)
+    changed = False
+    if before.exists() and after.exists():
+        changed = before.read_bytes() != after.read_bytes()
+    return {
+        "before": before_meta,
+        "after": after_meta,
+        "changed": changed,
+        "size_delta_bytes": after_meta["size_bytes"] - before_meta["size_bytes"],
+        "same_dimensions": before_meta["width"] == after_meta["width"] and before_meta["height"] == after_meta["height"],
+    }
+
+
+def capture_ui_screenshot(label: str = "ui") -> dict[str, Any]:
+    state = ensure_enabled()
+    target = screenshot_file_path(label)
+    ok = False
+    if sys.platform.startswith("win"):
+        ok = capture_with_windows_tools(target)
+    else:
+        ok = capture_with_linux_tools(target)
+    if not ok:
+        log_event("dev_screenshot_capture", "failed", "capture_unavailable")
+        raise DevModeError("Could not capture a shell screenshot in this environment")
+    previous = state.get("last_screenshot", "")
+    state["previous_screenshot"] = previous
+    state["last_screenshot"] = str(target)
+    save_state(state)
+    log_event("dev_screenshot_capture", "ok", f"path={target}")
+    return {
+        "status": "ok",
+        "path": str(target),
+        "previous": previous,
+        "metadata": screenshot_metadata(target),
+    }
+
+
+def get_last_screenshot() -> dict[str, Any]:
+    state = ensure_state()
+    return {
+        "last_screenshot": state.get("last_screenshot", ""),
+        "previous_screenshot": state.get("previous_screenshot", ""),
+    }
+
+
+def run_json_command(program: str, arguments: list[str], timeout: int = 20) -> dict[str, Any]:
+    executable = shutil.which(program)
+    command: list[str]
+    if executable is None:
+        local_script = ROOT_DIR / "scripts" / program
+        if local_script.exists():
+            command = [sys.executable, str(local_script), *arguments]
+        else:
+            command = [program, *arguments]
+    else:
+        command = [executable, *arguments]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout)
+    if result.returncode != 0:
+        raise DevModeError(result.stderr.strip() or f"Command failed: {' '.join(command)}")
+    return json.loads(result.stdout or "{}")
+
+
+def analyze_ui_screenshot(
+    image_path: str | None = None,
+    request: str = "",
+    allow_auto_refine: bool = True,
+    visual_iteration: int = 0,
+) -> dict[str, Any]:
+    state = ensure_enabled()
+    target = image_path or state.get("last_screenshot", "")
+    if not target:
+        raise DevModeError("No screenshot is available for analysis")
+    previous = state.get("previous_screenshot", "")
+    change_summary = state.get("last_change_summary", "")
+    analysis = run_json_command(
+        "velyx-ai",
+        [
+            "visual-analyze",
+            target,
+            "--request",
+            request or state.get("last_visual_request", ""),
+            "--change-summary",
+            change_summary,
+            "--previous",
+            previous,
+        ],
+        timeout=25,
+    )
+    state["last_visual_status"] = analysis.get("status", "ok")
+    state["last_visual_summary"] = analysis.get("summary", "")
+    state["last_visual_recommendation"] = analysis.get("recommendation", "")
+    state["pending_refinement_request"] = analysis.get("recommended_refinement_request", "")
+    state["last_visual_iteration"] = visual_iteration
+    state["last_comparison"] = analysis.get("comparison", {})
+    save_state(state)
+    log_event("dev_visual_analysis", "ok", f"request={request or state.get('last_visual_request', '')}")
+
+    auto_request = analysis.get("recommended_refinement_request", "")
+    can_auto = (
+        state.get("auto_refine", False)
+        and allow_auto_refine
+        and bool(auto_request)
+        and bool(analysis.get("safe_to_auto_run", False))
+        and visual_iteration < int(state.get("max_visual_iterations", MAX_VISUAL_ITERATIONS))
+    )
+    if not can_auto:
+        return analysis
+
+    applied = apply_request(auto_request)
+    restart = restart_shell_dev()
+    capture = capture_ui_screenshot("refine")
+    follow_up = analyze_ui_screenshot(
+        capture["path"],
+        request=auto_request,
+        allow_auto_refine=False,
+        visual_iteration=visual_iteration + 1,
+    )
+    return {
+        "status": "ok",
+        "summary": follow_up.get("summary", analysis.get("summary", "")),
+        "recommendation": follow_up.get("recommendation", analysis.get("recommendation", "")),
+        "recommended_refinement_request": follow_up.get("recommended_refinement_request", ""),
+        "comparison": follow_up.get("comparison", analysis.get("comparison", {})),
+        "analysis": analysis,
+        "auto_refinement": {
+            "request": auto_request,
+            "applied": applied,
+            "restart": restart,
+            "capture": capture,
+            "follow_up_analysis": follow_up,
+        },
+    }
+
+
+def apply_next_refinement() -> dict[str, Any]:
+    state = ensure_enabled()
+    refinement = state.get("pending_refinement_request", "")
+    if not refinement:
+        raise DevModeError("No pending visual refinement is available")
+    applied = apply_request(refinement)
+    restart = restart_shell_dev()
+    capture = capture_ui_screenshot("refine")
+    analysis = analyze_ui_screenshot(capture["path"], request=refinement, allow_auto_refine=False, visual_iteration=int(state.get("last_visual_iteration", 0)) + 1)
+    return {
+        "status": "ok",
+        "summary": f"Applied refinement: {refinement}",
+        "applied": applied,
+        "restart": restart,
+        "capture": capture,
+        "analysis": analysis,
     }
 
 
@@ -515,6 +801,12 @@ def usage() -> str:
             "  velyx-dev snapshot-ui-state",
             '  velyx-dev preview-ui-diff "<request>"',
             '  velyx-dev patch-ui-file "<request>"',
+            "  velyx-dev capture-ui-screenshot",
+            "  velyx-dev get-last-screenshot",
+            "  velyx-dev compare-screenshots <before> <after>",
+            '  velyx-dev analyze-ui-screenshot [<path>] --request "<request>"',
+            "  velyx-dev set-auto-refine true|false",
+            "  velyx-dev apply-next-refinement",
             "  velyx-dev restart-shell-dev",
             "  velyx-dev rollback",
         ]
@@ -563,6 +855,39 @@ def main(argv: list[str]) -> int:
             if len(argv) < 3:
                 raise DevModeError("Missing UI change request")
             print_json(apply_request(" ".join(argv[2:])))
+            return 0
+        if command == "capture-ui-screenshot":
+            print_json(capture_ui_screenshot())
+            return 0
+        if command == "get-last-screenshot":
+            print_json(get_last_screenshot())
+            return 0
+        if command == "compare-screenshots":
+            if len(argv) < 4:
+                raise DevModeError("Missing screenshot paths")
+            print_json(compare_screenshot_paths(argv[2], argv[3]))
+            return 0
+        if command == "analyze-ui-screenshot":
+            path_arg = None
+            request = ""
+            index = 2
+            while index < len(argv):
+                if argv[index] == "--request" and index + 1 < len(argv):
+                    request = argv[index + 1]
+                    index += 2
+                    continue
+                if not argv[index].startswith("--") and path_arg is None:
+                    path_arg = argv[index]
+                index += 1
+            print_json(analyze_ui_screenshot(path_arg, request=request))
+            return 0
+        if command == "set-auto-refine":
+            if len(argv) < 3:
+                raise DevModeError("Missing auto refine value")
+            print_json(set_auto_refine(argv[2].lower() in {"1", "true", "yes", "on"}))
+            return 0
+        if command == "apply-next-refinement":
+            print_json(apply_next_refinement())
             return 0
         if command == "restart-shell-dev":
             print_json(restart_shell_dev())

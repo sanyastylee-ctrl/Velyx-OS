@@ -74,6 +74,13 @@ class PermissionClient : public QObject
     Q_PROPERTY(bool devModeEnabled READ devModeEnabled NOTIFY devModeStateChanged)
     Q_PROPERTY(QString devOverlayPath READ devOverlayPath NOTIFY devModeStateChanged)
     Q_PROPERTY(QString devLastChange READ devLastChange NOTIFY devModeStateChanged)
+    Q_PROPERTY(bool devVisualFeedbackActive READ devVisualFeedbackActive NOTIFY devModeStateChanged)
+    Q_PROPERTY(bool devAutoRefine READ devAutoRefine NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devLastScreenshotPath READ devLastScreenshotPath NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devPreviousScreenshotPath READ devPreviousScreenshotPath NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devVisualSummary READ devVisualSummary NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devVisualRecommendation READ devVisualRecommendation NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devPendingRefinement READ devPendingRefinement NOTIFY devModeStateChanged)
     Q_PROPERTY(bool firstBootRequired READ firstBootRequired NOTIFY firstBootStateChanged)
     Q_PROPERTY(QString firstBootStep READ firstBootStep NOTIFY firstBootStateChanged)
     Q_PROPERTY(QString firstBootVersion READ firstBootVersion NOTIFY firstBootStateChanged)
@@ -152,6 +159,8 @@ public:
     Q_INVOKABLE void disableDevMode();
     Q_INVOKABLE void rollbackDevMode();
     Q_INVOKABLE void restartShellDev();
+    Q_INVOKABLE void setDevAutoRefine(bool enabled);
+    Q_INVOKABLE void applyNextDevRefinement();
     void setInputControlMode(const QString &mode, const QString &details);
 
     QVariantList apps() const;
@@ -218,6 +227,13 @@ public:
     bool devModeEnabled() const;
     QString devOverlayPath() const;
     QString devLastChange() const;
+    bool devVisualFeedbackActive() const;
+    bool devAutoRefine() const;
+    QString devLastScreenshotPath() const;
+    QString devPreviousScreenshotPath() const;
+    QString devVisualSummary() const;
+    QString devVisualRecommendation() const;
+    QString devPendingRefinement() const;
     bool firstBootRequired() const;
     QString firstBootStep() const;
     QString firstBootVersion() const;
@@ -350,6 +366,13 @@ private:
     bool m_devModeEnabled {false};
     QString m_devOverlayPath;
     QString m_devLastChange;
+    bool m_devVisualFeedbackActive {false};
+    bool m_devAutoRefine {false};
+    QString m_devLastScreenshotPath;
+    QString m_devPreviousScreenshotPath;
+    QString m_devVisualSummary;
+    QString m_devVisualRecommendation;
+    QString m_devPendingRefinement;
     bool m_firstBootRequired {false};
     QString m_firstBootStep {"welcome"};
     QString m_firstBootVersion;

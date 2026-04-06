@@ -399,6 +399,41 @@ QString PermissionClient::devLastChange() const
     return m_devLastChange;
 }
 
+bool PermissionClient::devVisualFeedbackActive() const
+{
+    return m_devVisualFeedbackActive;
+}
+
+bool PermissionClient::devAutoRefine() const
+{
+    return m_devAutoRefine;
+}
+
+QString PermissionClient::devLastScreenshotPath() const
+{
+    return m_devLastScreenshotPath;
+}
+
+QString PermissionClient::devPreviousScreenshotPath() const
+{
+    return m_devPreviousScreenshotPath;
+}
+
+QString PermissionClient::devVisualSummary() const
+{
+    return m_devVisualSummary;
+}
+
+QString PermissionClient::devVisualRecommendation() const
+{
+    return m_devVisualRecommendation;
+}
+
+QString PermissionClient::devPendingRefinement() const
+{
+    return m_devPendingRefinement;
+}
+
 bool PermissionClient::firstBootRequired() const
 {
     return m_firstBootRequired;
@@ -984,6 +1019,13 @@ void PermissionClient::refreshDevModeState()
     bool enabled = false;
     QString overlayPath;
     QString lastChange;
+    bool visualFeedbackActive = false;
+    bool autoRefine = false;
+    QString lastScreenshotPath;
+    QString previousScreenshotPath;
+    QString visualSummary;
+    QString visualRecommendation;
+    QString pendingRefinement;
 
     QFile stateFile(statePath);
     if (stateFile.open(QIODevice::ReadOnly)) {
@@ -993,6 +1035,13 @@ void PermissionClient::refreshDevModeState()
             enabled = object.value("enabled").toBool(false);
             overlayPath = object.value("overlay_root").toString();
             lastChange = object.value("last_change_summary").toString();
+            visualFeedbackActive = object.value("visual_feedback_active").toBool(false);
+            autoRefine = object.value("auto_refine").toBool(false);
+            lastScreenshotPath = object.value("last_screenshot").toString();
+            previousScreenshotPath = object.value("previous_screenshot").toString();
+            visualSummary = object.value("last_visual_summary").toString();
+            visualRecommendation = object.value("last_visual_recommendation").toString();
+            pendingRefinement = object.value("pending_refinement_request").toString();
         }
     }
 
@@ -1007,6 +1056,34 @@ void PermissionClient::refreshDevModeState()
     }
     if (m_devLastChange != lastChange) {
         m_devLastChange = lastChange;
+        changed = true;
+    }
+    if (m_devVisualFeedbackActive != visualFeedbackActive) {
+        m_devVisualFeedbackActive = visualFeedbackActive;
+        changed = true;
+    }
+    if (m_devAutoRefine != autoRefine) {
+        m_devAutoRefine = autoRefine;
+        changed = true;
+    }
+    if (m_devLastScreenshotPath != lastScreenshotPath) {
+        m_devLastScreenshotPath = lastScreenshotPath;
+        changed = true;
+    }
+    if (m_devPreviousScreenshotPath != previousScreenshotPath) {
+        m_devPreviousScreenshotPath = previousScreenshotPath;
+        changed = true;
+    }
+    if (m_devVisualSummary != visualSummary) {
+        m_devVisualSummary = visualSummary;
+        changed = true;
+    }
+    if (m_devVisualRecommendation != visualRecommendation) {
+        m_devVisualRecommendation = visualRecommendation;
+        changed = true;
+    }
+    if (m_devPendingRefinement != pendingRefinement) {
+        m_devPendingRefinement = pendingRefinement;
         changed = true;
     }
     if (changed) {
@@ -1972,6 +2049,7 @@ void PermissionClient::askAssistant(const QString &query)
         const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
         refreshAssistantState();
         refreshAiState();
+        refreshDevModeState();
         refreshAgentState();
         refreshRuntimeStatus();
         refreshSpaces();
@@ -2007,6 +2085,7 @@ void PermissionClient::approveAssistant(const QString &requestId)
         const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
         refreshAssistantState();
         refreshAiState();
+        refreshDevModeState();
         refreshAgentState();
         refreshRuntimeStatus();
         refreshSpaces();
@@ -2041,6 +2120,7 @@ void PermissionClient::denyAssistant(const QString &requestId)
         const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
         const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
         refreshAssistantState();
+        refreshDevModeState();
         if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
             updateLaunchState("ok", output.isEmpty() ? "Assistant action denied" : output);
             updateStatusDetails("assistant_deny", "ok", trimmed, "none");
@@ -2168,6 +2248,51 @@ void PermissionClient::restartShellDev()
 
     updateLaunchState("error", "Shell dev restart unavailable");
     updateStatusDetails("dev_mode_restart_shell", "failed", "dev_overlay", "retry");
+}
+
+void PermissionClient::setDevAutoRefine(bool enabled)
+{
+    QProcess process;
+    process.start("velyx-dev", {"set-auto-refine", enabled ? "true" : "false"});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshDevModeState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Dev visual auto refine updated" : output);
+            updateStatusDetails("dev_mode_auto_refine", "ok", enabled ? "enabled" : "disabled", "observe_visual_loop");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Failed to change auto refine" : errorOutput);
+        updateStatusDetails("dev_mode_auto_refine", "failed", enabled ? "enabled" : "disabled", "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Dev visual controls unavailable");
+    updateStatusDetails("dev_mode_auto_refine", "failed", enabled ? "enabled" : "disabled", "retry");
+}
+
+void PermissionClient::applyNextDevRefinement()
+{
+    QProcess process;
+    process.start("velyx-dev", {"apply-next-refinement"});
+    if (process.waitForStarted(400) && process.waitForFinished(30000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshDevModeState();
+        refreshAssistantState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Applied next visual refinement" : output);
+            updateStatusDetails("dev_mode_apply_refinement", "ok", "dev_visual_loop", "observe_shell");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Failed to apply next refinement" : errorOutput);
+        updateStatusDetails("dev_mode_apply_refinement", "failed", "dev_visual_loop", "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Dev refinement control unavailable");
+    updateStatusDetails("dev_mode_apply_refinement", "failed", "dev_visual_loop", "retry");
 }
 
 void PermissionClient::launchSelectedApp()

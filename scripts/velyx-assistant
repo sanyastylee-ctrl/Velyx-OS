@@ -348,6 +348,10 @@ class ToolRegistry:
             ("read_ui_file", "Read UI file", "dev", "Read an editable UI file", [], "never"),
             ("preview_ui_diff", "Preview UI diff", "dev", "Preview a live UI change", [], "never"),
             ("patch_ui_file", "Patch UI file", "dev", "Apply a live UI change in the overlay", [], "ask_once"),
+            ("capture_ui_screenshot", "Capture UI screenshot", "dev", "Capture the current shell UI screenshot", [], "never"),
+            ("get_last_screenshot", "Get last screenshot", "dev", "Get the last stored shell screenshot", [], "never"),
+            ("compare_screenshots", "Compare screenshots", "dev", "Compare before and after shell screenshots", [], "never"),
+            ("analyze_ui_screenshot", "Analyze UI screenshot", "dev", "Analyze the latest shell screenshot after a live edit", [], "never"),
             ("restart_shell_dev", "Restart shell", "dev", "Reload the shell after a live UI change", [], "never"),
             ("rollback_last_ui_change", "Rollback UI change", "dev", "Rollback the latest live UI change", [], "ask_once"),
             ("snapshot_ui_state", "Snapshot UI state", "dev", "Capture the current overlay state", [], "never"),
@@ -628,6 +632,50 @@ class ToolDispatcher:
                 raise AssistantError(result.stderr.strip() or "Failed to snapshot UI state")
             data = json.loads(result.stdout or "{}")
             return {"summary": data.get("summary", "UI snapshot created."), "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "capture_ui_screenshot":
+            result = self._run("velyx-dev", ["capture-ui-screenshot"], timeout=20)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to capture a UI screenshot")
+            data = json.loads(result.stdout or "{}")
+            return {
+                "summary": data.get("path", "UI screenshot captured."),
+                "details": json.dumps(data.get("metadata", {}), ensure_ascii=False),
+                "artifacts": [{"type": "screenshot", "value": data.get("path", "")}],
+            }
+        if tool_id == "get_last_screenshot":
+            result = self._run("velyx-dev", ["get-last-screenshot"], timeout=15)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to read the latest screenshot state")
+            data = json.loads(result.stdout or "{}")
+            return {"summary": data.get("last_screenshot", "") or "No screenshot available.", "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "compare_screenshots":
+            result = self._run("velyx-dev", ["compare-screenshots", payload["before"], payload["after"]], timeout=15)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to compare screenshots")
+            data = json.loads(result.stdout or "{}")
+            summary = "Screenshots changed." if data.get("changed") else "Screenshots look identical."
+            return {"summary": summary, "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "analyze_ui_screenshot":
+            command = ["analyze-ui-screenshot"]
+            if payload.get("path"):
+                command.append(payload["path"])
+            if payload.get("request"):
+                command.extend(["--request", payload["request"]])
+            result = self._run("velyx-dev", command, timeout=35)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to analyze the UI screenshot")
+            data = json.loads(result.stdout or "{}")
+            artifacts = []
+            comparison = data.get("comparison", {})
+            if comparison:
+                artifacts.append({"type": "screenshot_compare", "value": comparison})
+            if data.get("auto_refinement"):
+                artifacts.append({"type": "auto_refinement", "value": data.get("auto_refinement")})
+            return {
+                "summary": data.get("summary", "Visual analysis completed."),
+                "details": data.get("recommendation", "") or json.dumps(data, ensure_ascii=False),
+                "artifacts": artifacts,
+            }
         if tool_id == "preview_ui_diff":
             result = self._run("velyx-dev", ["preview-ui-diff", payload["request"]], timeout=25)
             if result.returncode != 0:
@@ -736,10 +784,13 @@ class PlanBuilder:
         summary = "Request prepared."
 
         if parsed["wants_ui_edit"]:
+            steps.append(PlanStep("capture_ui_screenshot", {}, "Capture the current UI before editing"))
             steps.append(PlanStep("snapshot_ui_state", {}, "Capture the current live UI overlay"))
             steps.append(PlanStep("preview_ui_diff", {"request": query}, "Preview the live UI change"))
             steps.append(PlanStep("patch_ui_file", {"request": query}, "Apply the live UI change"))
             steps.append(PlanStep("restart_shell_dev", {}, "Reload the shell to show the UI change"))
+            steps.append(PlanStep("capture_ui_screenshot", {}, "Capture the UI after the live change"))
+            steps.append(PlanStep("analyze_ui_screenshot", {"request": query}, "Analyze the visual result and suggest the next refinement"))
             return steps, "Preparing a live shell UI update."
 
         if parsed["wants_switch_dev"]:
