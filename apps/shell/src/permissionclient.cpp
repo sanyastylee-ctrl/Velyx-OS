@@ -4,8 +4,14 @@
 #include <QDBusInterface>
 #include <QDBusMessage>
 #include <QDBusReply>
+#include <QDateTime>
+#include <QDir>
+#include <QFile>
+#include <QStandardPaths>
+#include <QTextStream>
 #include <QVariantList>
 #include <QVariantMap>
+#include <utility>
 
 namespace {
 constexpr auto kPermissionsService = "com.velyx.Permissions";
@@ -46,6 +52,11 @@ QVariantList PermissionClient::apps() const
     return m_apps;
 }
 
+QVariantList PermissionClient::openApps() const
+{
+    return m_openApps;
+}
+
 QVariantMap PermissionClient::selectedAppInfo() const
 {
     return m_selectedAppInfo;
@@ -54,6 +65,16 @@ QVariantMap PermissionClient::selectedAppInfo() const
 QString PermissionClient::selectedAppId() const
 {
     return m_selectedAppInfo.value("app_id").toString();
+}
+
+QString PermissionClient::activeAppId() const
+{
+    return m_activeAppId;
+}
+
+QString PermissionClient::activeAppTitle() const
+{
+    return m_activeAppTitle;
 }
 
 QString PermissionClient::launchStatus() const
@@ -157,6 +178,46 @@ void PermissionClient::refreshApps()
     if (!m_apps.isEmpty() && m_selectedAppInfo.isEmpty()) {
         selectApp(m_apps.constFirst().toMap().value("app_id").toString());
     }
+}
+
+void PermissionClient::refreshOpenApps()
+{
+    QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
+    if (!launcher.isValid()) {
+        if (!m_openApps.isEmpty()) {
+            m_openApps.clear();
+            emit openAppsChanged();
+        }
+        reconcileActiveApp();
+        return;
+    }
+
+    const QDBusMessage reply = launcher.call("ListRunningApps");
+    if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().isEmpty()) {
+        return;
+    }
+
+    QVariantList openApps;
+    for (const QVariant &item : reply.arguments().constFirst().toList()) {
+        QVariantMap runtime = item.toMap();
+        const QString appId = runtime.value("app_id").toString();
+        const QVariantMap info = fetchAppInfo(appId);
+        const QVariantMap sessionApp = m_sessionApps.value(appId).toMap();
+        runtime.insert("display_name", info.value("display_name", appId));
+        runtime.insert("title", info.value("display_name", appId));
+        runtime.insert("trust_level", info.value("trust_level"));
+        runtime.insert("required", sessionApp.value("required", false));
+        runtime.insert("autostart", sessionApp.value("autostart", false));
+        runtime.insert("runtime_state", runtime.value("state"));
+        runtime.insert("window_state", runtime.value("state"));
+        runtime.insert("closable", true);
+        runtime.insert("active", appId == m_activeAppId);
+        openApps.push_back(runtime);
+    }
+
+    m_openApps = openApps;
+    emit openAppsChanged();
+    reconcileActiveApp();
 }
 
 void PermissionClient::refreshRuntimeStatus()
@@ -285,6 +346,12 @@ void PermissionClient::selectApp(const QString &appId)
     updateStatusDetails("get_app_info", "ok", "app_selected", "launch");
 }
 
+void PermissionClient::selectActiveApp(const QString &appId)
+{
+    updateActiveApp(appId, true);
+    selectApp(appId);
+}
+
 void PermissionClient::refreshSelectedAppRuntime()
 {
     if (m_selectedAppInfo.isEmpty()) {
@@ -315,6 +382,7 @@ void PermissionClient::refreshSelectedAppRuntime()
     updated.insert("runtime_failure_reason", runtime.value("failure_reason"));
     m_selectedAppInfo = updated;
     emit selectedAppInfoChanged();
+    refreshOpenApps();
 }
 
 void PermissionClient::launchSelectedApp()
@@ -414,6 +482,27 @@ void PermissionClient::restartSelectedApp()
     refreshApps();
 }
 
+void PermissionClient::closeOpenApp(const QString &appId)
+{
+    if (appId.isEmpty()) {
+        return;
+    }
+    selectApp(appId);
+    logShellEvent("shell_window_closed", appId, "close requested from open apps list");
+    stopSelectedApp();
+}
+
+void PermissionClient::restartOpenApp(const QString &appId)
+{
+    if (appId.isEmpty()) {
+        return;
+    }
+    selectApp(appId);
+    updateActiveApp(appId, true);
+    logShellEvent("shell_window_restart_requested", appId, "restart requested from open apps list");
+    restartSelectedApp();
+}
+
 void PermissionClient::requestLaunchFromLauncher(
     const QString &appId,
     const QString &appName,
@@ -447,6 +536,8 @@ void PermissionClient::requestLaunchFromLauncher(
             : QString("%1 (pid=%2)")
                   .arg(payload.value("message").toString(), payload.value("pid").toString());
         handleAllowedLaunch(message);
+        updateActiveApp(appId, false);
+        logShellEvent("shell_window_opened", appId, QString("status=%1 pid=%2").arg(status, payload.value("pid").toString()));
         refreshSelectedAppRuntime();
         refreshApps();
         return;
@@ -559,7 +650,7 @@ void PermissionClient::updateLaunchState(const QString &status, const QString &m
 
 void PermissionClient::handleAllowedLaunch(const QString &message)
 {
-    updateLaunchState("allowed", message);
+    updateLaunchState("launched", message);
 }
 
 void PermissionClient::updateStatusDetails(
@@ -594,4 +685,110 @@ void PermissionClient::handleDeniedLaunch(const QString &appName, const QString 
 {
     updateLaunchState("denied", QString("%1 не запущено. Доступ запрещен: %2")
                                     .arg(appName, permissionDisplayName));
+}
+
+void PermissionClient::updateActiveApp(const QString &appId, bool userInitiated)
+{
+    if (m_activeAppId == appId) {
+        return;
+    }
+    m_activeAppId = appId;
+    m_activeAppTitle.clear();
+    for (const QVariant &entry : std::as_const(m_openApps)) {
+        const QVariantMap app = entry.toMap();
+        if (app.value("app_id").toString() == appId) {
+            m_activeAppTitle = app.value("display_name", appId).toString();
+            break;
+        }
+    }
+    if (m_activeAppTitle.isEmpty() && m_selectedAppInfo.value("app_id").toString() == appId) {
+        m_activeAppTitle = m_selectedAppInfo.value("display_name", appId).toString();
+    }
+    for (int index = 0; index < m_openApps.size(); ++index) {
+        QVariantMap app = m_openApps[index].toMap();
+        app.insert("active", app.value("app_id").toString() == appId);
+        m_openApps[index] = app;
+    }
+    emit openAppsChanged();
+    emit activeAppChanged();
+    if (!appId.isEmpty()) {
+        logShellEvent(
+            "shell_active_app_changed",
+            appId,
+            userInitiated ? "user_selected=true" : "user_selected=false");
+    }
+}
+
+void PermissionClient::reconcileActiveApp()
+{
+    QString nextActiveId = m_activeAppId;
+    bool foundActiveRunning = false;
+    for (int index = 0; index < m_openApps.size(); ++index) {
+        QVariantMap app = m_openApps[index].toMap();
+        const bool isActive = app.value("app_id").toString() == m_activeAppId;
+        const bool shouldBeActive = isActive && !m_activeAppId.isEmpty();
+        app.insert("active", shouldBeActive);
+        m_openApps[index] = app;
+        if (shouldBeActive) {
+            foundActiveRunning = true;
+        }
+    }
+
+    if (!foundActiveRunning) {
+        nextActiveId.clear();
+        for (const QVariant &entry : std::as_const(m_openApps)) {
+            const QVariantMap app = entry.toMap();
+            if (app.value("state").toString() == "running") {
+                nextActiveId = app.value("app_id").toString();
+                break;
+            }
+        }
+        if (nextActiveId != m_activeAppId) {
+            m_activeAppId = nextActiveId;
+            m_activeAppTitle.clear();
+            for (int index = 0; index < m_openApps.size(); ++index) {
+                QVariantMap app = m_openApps[index].toMap();
+                const bool isActive = app.value("app_id").toString() == nextActiveId;
+                app.insert("active", isActive);
+                if (isActive) {
+                    m_activeAppTitle = app.value("display_name", nextActiveId).toString();
+                }
+                m_openApps[index] = app;
+            }
+            emit openAppsChanged();
+            emit activeAppChanged();
+            logShellEvent(
+                "shell_active_app_changed",
+                nextActiveId,
+                nextActiveId.isEmpty() ? "active_cleared=true" : "auto_selected=true");
+        }
+    }
+
+    for (const QVariant &entry : std::as_const(m_openApps)) {
+        const QVariantMap app = entry.toMap();
+        logShellEvent(
+            "shell_window_state_updated",
+            app.value("app_id").toString(),
+            QString("state=%1 pid=%2 active=%3")
+                .arg(app.value("state").toString(),
+                     app.value("pid").toString(),
+                     app.value("active").toBool() ? "true" : "false"));
+    }
+}
+
+void PermissionClient::logShellEvent(const QString &action, const QString &appId, const QString &details)
+{
+    const QString home = QStandardPaths::writableLocation(QStandardPaths::HomeLocation);
+    const QString dirPath = QDir(home).filePath(".velyx");
+    QDir().mkpath(dirPath);
+    QFile file(QDir(dirPath).filePath("shell_mvp.log"));
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Append | QIODevice::Text)) {
+        return;
+    }
+    QTextStream stream(&file);
+    stream << QDateTime::currentDateTimeUtc().toString(Qt::ISODate)
+           << " action=" << action
+           << " app_id=" << appId
+           << " details=" << details
+           << "\n";
 }

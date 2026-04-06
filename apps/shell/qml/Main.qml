@@ -15,6 +15,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         permissionClient.refreshRuntimeStatus()
+        permissionClient.refreshOpenApps()
         permissionClient.refreshApps()
     }
 
@@ -24,6 +25,7 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             permissionClient.refreshRuntimeStatus()
+            permissionClient.refreshOpenApps()
             permissionClient.refreshSelectedAppRuntime()
             permissionClient.refreshApps()
         }
@@ -161,6 +163,14 @@ ApplicationWindow {
                 title: "Session health"
                 subtitle: permissionClient.sessionHealth
             }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Active app"
+                subtitle: permissionClient.activeAppTitle.length > 0
+                    ? permissionClient.activeAppTitle + " (" + permissionClient.activeAppId + ")"
+                    : "Нет активного приложения"
+            }
         }
     }
 
@@ -170,7 +180,7 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.leftMargin: 72
         width: 360
-        height: 448
+        height: 340
 
         ColumnLayout {
             anchors.fill: parent
@@ -258,7 +268,7 @@ ApplicationWindow {
         anchors.left: parent.left
         anchors.leftMargin: 468
         width: 380
-        height: 448
+        height: 340
 
         ColumnLayout {
             anchors.fill: parent
@@ -369,7 +379,7 @@ ApplicationWindow {
         anchors.right: parent.right
         anchors.rightMargin: 72
         width: 420
-        height: 448
+        height: 340
 
         ColumnLayout {
             anchors.fill: parent
@@ -427,6 +437,85 @@ ApplicationWindow {
                                : Theme.textPrimary)
                         font.pixelSize: 14
                     }
+                }
+            }
+        }
+    }
+
+    Card {
+        anchors.left: parent.left
+        anchors.leftMargin: 72
+        anchors.right: parent.right
+        anchors.rightMargin: 72
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: 48
+        height: 180
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: Theme.space3
+
+            SectionHeader {
+                title: "Open Apps"
+                subtitle: "Минимальный window host layer"
+            }
+
+            ListView {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                clip: true
+                spacing: Theme.space3
+                model: permissionClient.openApps
+
+                delegate: Rectangle {
+                    required property var modelData
+                    width: ListView.view.width
+                    height: 62
+                    radius: 16
+                    color: modelData.active ? Theme.surface3 : Theme.surface2
+                    border.width: 1
+                    border.color: modelData.active ? Theme.accentStrong : Theme.strokeSubtle
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: 14
+                        spacing: Theme.space3
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Label {
+                                text: modelData.display_name ? modelData.display_name : modelData.app_id
+                                color: Theme.textPrimary
+                                font.pixelSize: 15
+                                font.weight: Font.DemiBold
+                            }
+
+                            Label {
+                                text: modelData.app_id + " | state=" + modelData.state
+                                    + (modelData.pid ? " | pid=" + modelData.pid : "")
+                                color: Theme.textSecondary
+                                font.pixelSize: 12
+                            }
+                        }
+
+                        Button {
+                            text: modelData.active ? "Active" : "Activate"
+                            onClicked: permissionClient.selectActiveApp(modelData.app_id)
+                        }
+
+                        Button {
+                            text: "Restart"
+                            onClicked: permissionClient.restartOpenApp(modelData.app_id)
+                        }
+
+                        Button {
+                            text: "Close"
+                            onClicked: permissionClient.closeOpenApp(modelData.app_id)
+                        }
+                    }
+
                 }
             }
         }

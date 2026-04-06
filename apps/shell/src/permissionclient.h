@@ -9,8 +9,11 @@ class PermissionClient : public QObject
 {
     Q_OBJECT
     Q_PROPERTY(QVariantList apps READ apps NOTIFY appsChanged)
+    Q_PROPERTY(QVariantList openApps READ openApps NOTIFY openAppsChanged)
     Q_PROPERTY(QVariantMap selectedAppInfo READ selectedAppInfo NOTIFY selectedAppInfoChanged)
     Q_PROPERTY(QString selectedAppId READ selectedAppId NOTIFY selectedAppInfoChanged)
+    Q_PROPERTY(QString activeAppId READ activeAppId NOTIFY activeAppChanged)
+    Q_PROPERTY(QString activeAppTitle READ activeAppTitle NOTIFY activeAppChanged)
     Q_PROPERTY(QString launchStatus READ launchStatus NOTIFY launchStatusChanged)
     Q_PROPERTY(QString launchResultMessage READ launchResultMessage NOTIFY launchResultMessageChanged)
     Q_PROPERTY(QString lastAction READ lastAction NOTIFY statusDetailsChanged)
@@ -27,12 +30,16 @@ public:
     explicit PermissionClient(QObject *parent = nullptr);
 
     Q_INVOKABLE void refreshApps();
+    Q_INVOKABLE void refreshOpenApps();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
+    Q_INVOKABLE void selectActiveApp(const QString &appId);
     Q_INVOKABLE void refreshSelectedAppRuntime();
     Q_INVOKABLE void launchSelectedApp();
     Q_INVOKABLE void stopSelectedApp();
     Q_INVOKABLE void restartSelectedApp();
+    Q_INVOKABLE void closeOpenApp(const QString &appId);
+    Q_INVOKABLE void restartOpenApp(const QString &appId);
     Q_INVOKABLE void startLaunch(
         const QString &appId,
         const QString &appName,
@@ -41,8 +48,11 @@ public:
     Q_INVOKABLE void resetPermissions(const QString &appId);
 
     QVariantList apps() const;
+    QVariantList openApps() const;
     QVariantMap selectedAppInfo() const;
     QString selectedAppId() const;
+    QString activeAppId() const;
+    QString activeAppTitle() const;
     QString launchStatus() const;
     QString launchResultMessage() const;
     QString lastAction() const;
@@ -63,11 +73,13 @@ signals:
         const QString &permissionDisplayName,
         const QString &explanation);
     void appsChanged();
+    void openAppsChanged();
     void selectedAppInfoChanged();
     void launchStatusChanged();
     void launchResultMessageChanged();
     void statusDetailsChanged();
     void runtimeStatusChanged();
+    void activeAppChanged();
 
 private:
     QVariantMap fetchAppInfo(const QString &appId);
@@ -76,6 +88,9 @@ private:
         const QString &appName,
         const QString &permission);
     QVariantMap fetchAppRuntime(const QString &appId);
+    void updateActiveApp(const QString &appId, bool userInitiated);
+    void reconcileActiveApp();
+    void logShellEvent(const QString &action, const QString &appId, const QString &details);
     void updateLaunchState(const QString &status, const QString &message);
     void updateStatusDetails(
         const QString &action,
@@ -86,8 +101,11 @@ private:
     void handleDeniedLaunch(const QString &appName, const QString &permissionDisplayName);
 
     QVariantList m_apps;
+    QVariantList m_openApps;
     QVariantMap m_sessionApps;
     QVariantMap m_selectedAppInfo;
+    QString m_activeAppId;
+    QString m_activeAppTitle;
     QString m_pendingAppId;
     QString m_pendingAppName;
     QString m_pendingPermission;
