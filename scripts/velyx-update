@@ -19,9 +19,13 @@ ROLLBACK_UNIT_DIR="${UPDATE_DIR}/last-known-good-units"
 STATE_FILE="${STATE_DIR}/update_state.json"
 LOG_FILE="${STATE_DIR}/update.log"
 SOURCE_ROOT="${VELYX_UPDATE_SOURCE:-$PWD}"
+SOURCE_SPEC=""
 SOURCE_BIN_DIR=""
 SOURCE_SHELL_BINARY=""
 FORCE_UPDATE="false"
+REMOTE_SOURCE_DIR=""
+DOWNLOAD_ROOT=""
+DEFAULT_GITHUB_SOURCE="https://github.com/sanyastylee-ctrl/Velyx-OS.git"
 
 mkdir -p "${STATE_DIR}" "${UPDATE_DIR}" "${STAGING_ROOT}" "${FAILED_ROOT}"
 
@@ -31,6 +35,14 @@ log_event() {
   local detail="${3:-}"
   printf '%s event=%s status=%s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "${event}" "${status}" "${detail}" >> "${LOG_FILE}"
 }
+
+cleanup() {
+  if [[ -n "${DOWNLOAD_ROOT}" && -d "${DOWNLOAD_ROOT}" ]]; then
+    rm -rf "${DOWNLOAD_ROOT}" || true
+  fi
+}
+
+trap cleanup EXIT
 
 json_escape() {
   local value="${1:-}"
@@ -57,6 +69,114 @@ json_get_bool() {
     return 0
   fi
   grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" "${file}" | head -n1 | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || printf 'false\n'
+}
+
+require_tool() {
+  local name="$1"
+  command -v "${name}" >/dev/null 2>&1 || {
+    echo "missing required command: ${name}" >&2
+    exit 1
+  }
+}
+
+is_remote_source() {
+  local value="$1"
+  [[ "${value}" == "github" || "${value}" =~ ^https?:// || "${value}" =~ ^git@ ]]
+}
+
+resolve_extracted_source_root() {
+  local base="$1"
+  local directories
+  mapfile -t directories < <(find "${base}" -mindepth 1 -maxdepth 1 -type d)
+  if [[ "${#directories[@]}" -eq 1 ]]; then
+    printf '%s\n' "${directories[0]}"
+  else
+    printf '%s\n' "${base}"
+  fi
+}
+
+fetch_remote_source() {
+  local spec="$1"
+  local resolved_spec="${spec}"
+  [[ "${resolved_spec}" == "github" ]] && resolved_spec="${DEFAULT_GITHUB_SOURCE}"
+
+  DOWNLOAD_ROOT="$(mktemp -d "${UPDATE_DIR}/network-source.XXXXXX")"
+  log_event "update_source_fetch_begin" "started" "source=${resolved_spec}"
+
+  if [[ "${resolved_spec}" == *.git || ( "${resolved_spec}" == *github.com/* && "${resolved_spec}" != *.zip && "${resolved_spec}" != *.tar.gz && "${resolved_spec}" != *.tgz && "${resolved_spec}" != *.tar ) ]]; then
+    require_tool git
+    if ! git clone --depth 1 "${resolved_spec}" "${DOWNLOAD_ROOT}/source" >/dev/null 2>&1; then
+      log_event "update_source_fetch_failed" "failed" "source=${resolved_spec} reason=git_clone_failed"
+      echo "network update failed: unable to clone ${resolved_spec}" >&2
+      return 1
+    fi
+    REMOTE_SOURCE_DIR="${DOWNLOAD_ROOT}/source"
+    log_event "update_source_fetch_ok" "ok" "mode=git source=${resolved_spec} path=${REMOTE_SOURCE_DIR}"
+    return 0
+  fi
+
+  local downloader=""
+  if command -v curl >/dev/null 2>&1; then
+    downloader="curl"
+  elif command -v wget >/dev/null 2>&1; then
+    downloader="wget"
+  else
+    log_event "update_source_fetch_failed" "failed" "source=${resolved_spec} reason=no_downloader"
+    echo "network update failed: curl or wget is required" >&2
+    return 1
+  fi
+
+  local archive_path="${DOWNLOAD_ROOT}/payload"
+  if [[ "${resolved_spec}" == *.tar.gz || "${resolved_spec}" == *.tgz ]]; then
+    archive_path="${archive_path}.tar.gz"
+  elif [[ "${resolved_spec}" == *.zip ]]; then
+    archive_path="${archive_path}.zip"
+  elif [[ "${resolved_spec}" == *.tar ]]; then
+    archive_path="${archive_path}.tar"
+  else
+    archive_path="${archive_path}.tar.gz"
+  fi
+
+  if [[ "${downloader}" == "curl" ]]; then
+    if ! curl -fsSL "${resolved_spec}" -o "${archive_path}"; then
+      log_event "update_source_fetch_failed" "failed" "source=${resolved_spec} reason=download_failed"
+      echo "network update failed: unable to download ${resolved_spec}" >&2
+      return 1
+    fi
+  else
+    if ! wget -qO "${archive_path}" "${resolved_spec}"; then
+      log_event "update_source_fetch_failed" "failed" "source=${resolved_spec} reason=download_failed"
+      echo "network update failed: unable to download ${resolved_spec}" >&2
+      return 1
+    fi
+  fi
+
+  mkdir -p "${DOWNLOAD_ROOT}/extract"
+  if [[ "${archive_path}" == *.zip ]]; then
+    require_tool unzip
+    if ! unzip -q "${archive_path}" -d "${DOWNLOAD_ROOT}/extract"; then
+      log_event "update_source_fetch_failed" "failed" "source=${resolved_spec} reason=zip_extract_failed"
+      echo "network update failed: invalid zip payload" >&2
+      return 1
+    fi
+  else
+    require_tool tar
+    if ! tar -xf "${archive_path}" -C "${DOWNLOAD_ROOT}/extract"; then
+      log_event "update_source_fetch_failed" "failed" "source=${resolved_spec} reason=archive_extract_failed"
+      echo "network update failed: invalid archive payload" >&2
+      return 1
+    fi
+  fi
+
+  REMOTE_SOURCE_DIR="$(resolve_extracted_source_root "${DOWNLOAD_ROOT}/extract")"
+  if [[ ! -d "${REMOTE_SOURCE_DIR}" ]]; then
+    log_event "update_source_fetch_failed" "failed" "source=${resolved_spec} reason=missing_extracted_root"
+    echo "network update failed: extracted payload is invalid" >&2
+    return 1
+  fi
+
+  log_event "update_source_fetch_ok" "ok" "mode=archive source=${resolved_spec} path=${REMOTE_SOURCE_DIR}"
+  return 0
 }
 
 determine_source_version() {
@@ -226,6 +346,10 @@ perform_rollback() {
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --source)
+      SOURCE_SPEC="$2"
+      shift 2
+      ;;
     --source-root)
       SOURCE_ROOT="$2"
       shift 2
@@ -248,6 +372,17 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "${SOURCE_SPEC}" && is_remote_source "${SOURCE_SPEC}" ]]; then
+  if fetch_remote_source "${SOURCE_SPEC}"; then
+    SOURCE_ROOT="${REMOTE_SOURCE_DIR}"
+  else
+    log_event "update_source_fetch_fallback" "ok" "source=${SOURCE_SPEC} fallback=${SOURCE_ROOT}"
+    echo "warning: remote source unavailable, falling back to local source root ${SOURCE_ROOT}" >&2
+  fi
+elif [[ -n "${SOURCE_SPEC}" ]]; then
+  SOURCE_ROOT="${SOURCE_SPEC}"
+fi
 
 SOURCE_ROOT="$(cd "${SOURCE_ROOT}" && pwd)"
 SOURCE_BIN_DIR="${SOURCE_BIN_DIR:-${VELYX_UPDATE_BIN_DIR:-${SOURCE_ROOT}/target/release}}"
@@ -283,7 +418,7 @@ if [[ ! -f "${SOURCE_SHELL_BINARY}" ]]; then
   exit 1
 fi
 
-log_event "update_begin" "started" "current_version=${CURRENT_VERSION} candidate_version=${CANDIDATE_VERSION}"
+log_event "update_begin" "started" "current_version=${CURRENT_VERSION} candidate_version=${CANDIDATE_VERSION} source_root=${SOURCE_ROOT}"
 write_state "${CURRENT_VERSION}" "${CANDIDATE_VERSION}" "${LAST_GOOD_VERSION}" "preparing" "update_begin" "$( [[ -d "${ROLLBACK_PREFIX}" ]] && echo true || echo false )" "false" "$(json_get_string "last_failed_version")" "$(json_get_string "last_recovery_result")"
 
 rm -rf "${STAGING_PREFIX}"
@@ -303,6 +438,7 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-launcher-service" \
   "${STAGING_PREFIX}/bin/velyx-update-engine" \
   "${STAGING_PREFIX}/bin/velyx-recovery-service" \
+  "${STAGING_PREFIX}/bin/velyx-version" \
   "${STAGING_PREFIX}/bin/velyx-app" \
   "${STAGING_PREFIX}/bin/velyx-space" \
   "${STAGING_PREFIX}/bin/velyx-intent" \

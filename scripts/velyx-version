@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/velyx/velyx.env"
+if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+fi
+
+PREFIX="${VELYX_INSTALL_PREFIX:-$HOME/.local/share/velyx}"
+STATE_DIR="${VELYX_STATE_DIR:-$HOME/.velyx}"
+VERSION_FILE="${PREFIX}/share/version.txt"
+STATE_FILE="${STATE_DIR}/update_state.json"
+
+read_version_file() {
+  if [[ -f "${VERSION_FILE}" ]]; then
+    awk -F= '/^version=/{print $2; exit}' "${VERSION_FILE}"
+    return 0
+  fi
+  return 1
+}
+
+read_state_key() {
+  local key="$1"
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    return 1
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "${STATE_FILE}" | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true
+}
+
+VERSION="$(read_version_file || true)"
+UPDATE_STATE="$(read_state_key update_state || true)"
+LAST_RESULT="$(read_state_key last_update_result || true)"
+
+if [[ -z "${VERSION}" ]]; then
+  VERSION="$(read_state_key current_version || true)"
+fi
+
+if [[ -z "${VERSION}" ]]; then
+  echo "unknown"
+  exit 0
+fi
+
+printf 'version=%s\n' "${VERSION}"
+if [[ -n "${UPDATE_STATE}" ]]; then
+  printf 'update_state=%s\n' "${UPDATE_STATE}"
+fi
+if [[ -n "${LAST_RESULT}" ]]; then
+  printf 'last_update_result=%s\n' "${LAST_RESULT}"
+fi
