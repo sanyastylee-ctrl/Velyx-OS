@@ -201,6 +201,7 @@ if [[ "${MODE}" != "units-only" ]]; then
   install_helper_script "${ROOT_DIR}/scripts/velyx-firstboot" "velyx-firstboot"
   install_helper_script "${ROOT_DIR}/scripts/velyx-installer" "velyx-installer"
   install_helper_script "${ROOT_DIR}/scripts/velyx-diagnostics" "velyx-diagnostics"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-vm-profile" "velyx-vm-profile"
   install_helper_script "${ROOT_DIR}/scripts/velyx-vm-preview" "velyx-vm-preview"
 
   cp -a "${ROOT_DIR}/app-manifests/." "${MANIFESTS_DIR}/"
@@ -264,6 +265,7 @@ EOF
   install_script_binary "${ROOT_DIR}/scripts/velyx-firstboot" "velyx-firstboot"
   install_script_binary "${ROOT_DIR}/scripts/velyx-installer" "velyx-installer"
   install_script_binary "${ROOT_DIR}/scripts/velyx-diagnostics" "velyx-diagnostics"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-vm-profile" "velyx-vm-profile"
   install_script_binary "${ROOT_DIR}/scripts/velyx-vm-preview" "velyx-vm-preview"
   if command -v python3 >/dev/null 2>&1; then
     "${BIN_DIR}/velyx-app" sync-system >/dev/null || true

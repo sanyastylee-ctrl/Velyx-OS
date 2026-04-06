@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def profile_path() -> Path:
+    local = ROOT / "profiles" / "velyx-vm-profile.json"
+    if local.exists():
+        return local
+    installed = ROOT / "share" / "profiles" / "velyx-vm-profile.json"
+    if installed.exists():
+        return installed
+    raise FileNotFoundError("velyx-vm-profile not found")
+
+
+def load_profile() -> dict:
+    return json.loads(profile_path().read_text(encoding="utf-8"))
+
+
+def state_dir() -> Path:
+    env = os.environ.get("VELYX_STATE_DIR")
+    if env:
+        return Path(env)
+    return Path.home() / ".velyx"
+
+
+def read_json(path: Path, default):
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+    return default
+
+
+def tool_available(name: str) -> bool:
+    if shutil.which(name):
+        return True
+    local = ROOT / "scripts" / name
+    return local.exists()
+
+
+def command_ok(command: list[str], timeout: int = 12) -> bool:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def validation_report() -> dict:
+    profile = load_profile()
+    st = state_dir()
+    update_state = read_json(st / "update_state.json", {})
+    assistant_state = read_json(st / "assistant_state.json", {})
+    model_state = read_json(st / "model_state.json", {})
+    dev_state = read_json(st / "dev_mode.json", {})
+
+    shell_tool = tool_available("velyx-shell")
+    assistant_tool = tool_available("velyx-assistant")
+    model_tool = tool_available("velyx-model")
+    update_tool = tool_available("velyx-update")
+    dev_tool = tool_available("velyx-dev")
+    entry_tool = tool_available("velyx-entry")
+
+    checks = {
+        "entry_available": entry_tool,
+        "shell_starts": shell_tool,
+        "assistant_available": assistant_tool and command_ok(["python", str(ROOT / "scripts" / "velyx-assistant"), "status"]) if not shutil.which("velyx-assistant") and (ROOT / "scripts" / "velyx-assistant").exists() else assistant_tool,
+        "model_layer_available": model_tool,
+        "update_available": update_tool,
+        "control_center_available": (ROOT / "apps" / "shell" / "qml" / "ControlCenterPanel.qml").exists(),
+        "dev_mode_toggle_available": dev_tool,
+        "dev_live_ui_patch_works": dev_state.get("enabled", False) or dev_tool,
+        "rollback_works": dev_tool,
+    }
+
+    fail_cases = {
+        "install_fail": {
+            "detected": False,
+            "next_step": "Run velyx-entry and choose Repair / Diagnostics."
+        },
+        "network_fail": {
+            "detected": False,
+            "next_step": "Run velyx-network check and continue in local-only mode if needed."
+        },
+        "model_fail": {
+            "detected": model_tool and not bool(model_state.get("model_available", False)) and bool(model_state),
+            "next_step": "Use stub or auto-hardware mode, then re-run model detection."
+        },
+        "shell_fail": {
+            "detected": False,
+            "next_step": "Use velyx-diagnostics and velyx-recovery, then re-enter Velyx Shell."
+        }
+    }
+
+    status = "ok" if checks["entry_available"] and checks["shell_starts"] else "degraded"
+    if update_state.get("recovery_needed", False):
+        fail_cases["install_fail"]["detected"] = True
+        fail_cases["shell_fail"]["detected"] = True
+        status = "needs_attention"
+
+    return {
+        "profile": profile["profile_id"],
+        "status": status,
+        "install_path": profile.get("vm_install_path", []),
+        "validation_checklist": checks,
+        "state_summary": {
+            "update_state": update_state.get("update_state", "unknown"),
+            "last_update_result": update_state.get("last_update_result", ""),
+            "assistant_status": assistant_state.get("current_execution_status", "unknown"),
+            "model_available": model_state.get("model_available", False),
+            "dev_mode_enabled": dev_state.get("enabled", False),
+        },
+        "fail_cases": fail_cases,
+        "diagnostics": [
+            "velyx-status",
+            "velyx-logs.sh",
+            "journalctl --user -b",
+        ],
+    }
+
+
+def usage() -> int:
+    print("usage: velyx-vm-profile profile | check | validate", file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return usage()
+
+    command = sys.argv[1]
+    if command == "profile":
+        print(json.dumps(load_profile(), ensure_ascii=False, indent=2))
+        return 0
+    if command in {"check", "validate"}:
+        report = validation_report()
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0 if report.get("status") == "ok" else 1
+    return usage()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

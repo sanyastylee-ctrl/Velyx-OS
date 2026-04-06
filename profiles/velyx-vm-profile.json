@@ -1,0 +1,68 @@
+{
+  "profile_id": "velyx-vm-profile",
+  "display_name": "Velyx OS VM Profile",
+  "channel": "preview",
+  "description": "Reference VM deployment profile for installing and running Velyx OS Preview as a shell-first virtual machine environment.",
+  "minimum_requirements": {
+    "memory_gb": 6,
+    "vcpus": 2,
+    "disk_gb": 20,
+    "graphics": "basic accelerated graphics",
+    "network": "recommended"
+  },
+  "recommended_requirements": {
+    "memory_gb": 8,
+    "vcpus": 4,
+    "disk_gb": 24,
+    "graphics": "virtio or vmware-compatible accelerated graphics",
+    "network": "enabled"
+  },
+  "dependencies": [
+    "systemd",
+    "dbus-user-session",
+    "python3",
+    "qt6",
+    "xorg",
+    "xprop",
+    "wmctrl",
+    "xdotool",
+    "curl or wget",
+    "git"
+  ],
+  "env_setup": {
+    "install_prefix": "${VELYX_INSTALL_PREFIX:-$HOME/.local/share/velyx}",
+    "state_dir": "${VELYX_STATE_DIR:-$HOME/.velyx}",
+    "entry": "velyx-entry",
+    "installer": "velyx-installer",
+    "first_boot": "velyx-firstboot",
+    "shell": "velyx-shell",
+    "update": "velyx-update",
+    "recovery": "velyx-recovery"
+  },
+  "vm_install_path": [
+    "Create a VM with the recommended preview resources.",
+    "Prepare the base Linux userspace with the required dependencies.",
+    "Start Velyx through velyx-entry.",
+    "Choose Install Velyx.",
+    "Finish the installer flow.",
+    "Reboot the VM.",
+    "Complete Velyx First Boot.",
+    "Continue into Velyx Shell."
+  ],
+  "validation_checklist": [
+    "shell_starts",
+    "assistant_available",
+    "model_layer_available",
+    "update_available",
+    "control_center_available",
+    "dev_mode_toggle_available",
+    "dev_live_ui_patch_works",
+    "rollback_works"
+  ],
+  "fail_cases": [
+    "install_fail",
+    "network_fail",
+    "model_fail",
+    "shell_fail"
+  ]
+}
