@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -46,6 +48,51 @@ impl AppManifest {
         map.insert("category".to_string(), self.category.clone());
         map.insert("sandbox_profile".to_string(), self.sandbox_profile.clone());
         map
+    }
+
+    pub fn validate_for_launch(&self) -> Result<(), String> {
+        if self.app_id.trim().is_empty() {
+            return Err("app_id_missing".to_string());
+        }
+        if self.display_name.trim().is_empty() {
+            return Err("display_name_missing".to_string());
+        }
+        if self.executable_path.trim().is_empty() {
+            return Err("executable_path_missing".to_string());
+        }
+        if self.executable_path.contains("__TODO__") || self.executable_path.contains("<placeholder>") {
+            return Err("executable_path_placeholder".to_string());
+        }
+        if self.sandbox_profile.trim().is_empty() {
+            return Err("sandbox_profile_missing".to_string());
+        }
+        if self.requested_permissions.iter().any(|permission| permission.trim().is_empty()) {
+            return Err("permission_entry_invalid".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn validate_executable(&self) -> Result<(), String> {
+        let path = PathBuf::from(&self.executable_path);
+        if !path.is_absolute() {
+            return Err("executable_path_not_absolute".to_string());
+        }
+        if !path.exists() {
+            return Err("executable_path_missing".to_string());
+        }
+        if !path.is_file() {
+            return Err("executable_path_not_file".to_string());
+        }
+        #[cfg(unix)]
+        {
+            let permissions = fs::metadata(&path)
+                .map_err(|_| "executable_metadata_unreadable".to_string())?
+                .permissions();
+            if permissions.mode() & 0o111 == 0 {
+                return Err("executable_not_executable".to_string());
+            }
+        }
+        Ok(())
     }
 }
 

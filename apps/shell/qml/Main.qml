@@ -418,6 +418,18 @@ ApplicationWindow {
                 subtitle: permissionClient.selectedAppInfo.executable_path ? permissionClient.selectedAppInfo.executable_path : "-"
             }
             ListRow {
+                title: "Manifest valid"
+                subtitle: permissionClient.selectedAppInfo.manifest_valid ? permissionClient.selectedAppInfo.manifest_valid : "-"
+            }
+            ListRow {
+                title: "Executable valid"
+                subtitle: permissionClient.selectedAppInfo.executable_valid ? permissionClient.selectedAppInfo.executable_valid : "-"
+            }
+            ListRow {
+                title: "Profile valid"
+                subtitle: permissionClient.selectedAppInfo.profile_valid ? permissionClient.selectedAppInfo.profile_valid : "-"
+            }
+            ListRow {
                 title: "Runtime state"
                 subtitle: permissionClient.selectedAppInfo.runtime_state ? permissionClient.selectedAppInfo.runtime_state : "idle"
             }
@@ -560,11 +572,18 @@ ApplicationWindow {
                             : "Здесь появится результат launch/permission flow."
                         color: permissionClient.launchStatus === "denied"
                             ? Theme.danger
+                            : ((permissionClient.launchStatus === "manifest_invalid"
+                                || permissionClient.launchStatus === "executable_invalid"
+                                || permissionClient.launchStatus === "profile_invalid"
+                                || permissionClient.launchStatus === "sandbox_failed"
+                                || permissionClient.launchStatus === "security_failed"
+                                || permissionClient.launchStatus === "failed")
+                               ? Theme.warning
                             : ((permissionClient.launchStatus === "allowed"
                                 || permissionClient.launchStatus === "already_running"
                                 || permissionClient.launchStatus === "launched")
                                ? Theme.accentStrong
-                               : Theme.textPrimary)
+                               : Theme.textPrimary))
                         font.pixelSize: 14
                     }
                 }

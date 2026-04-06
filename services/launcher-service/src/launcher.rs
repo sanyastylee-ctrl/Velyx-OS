@@ -1,6 +1,6 @@
 use crate::audit::LauncherAuditLogger;
 use crate::manifest::{AppManifest, ManifestRegistry};
-use crate::sandbox::{SandboxLaunchRequest, SandboxRunner};
+use crate::sandbox::{validate_profile_name, SandboxLaunchRequest, SandboxRunner};
 use crate::tracking::ProcessTracker;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,6 +17,66 @@ pub struct LauncherApi {
 }
 
 impl LauncherApi {
+    fn enrich_manifest_security(
+        manifest: &AppManifest,
+        payload: &mut HashMap<String, String>,
+    ) {
+        let manifest_validation = manifest.validate_for_launch();
+        let executable_validation = manifest.validate_executable();
+        let profile_validation = validate_profile_name(&manifest.sandbox_profile)
+            .and_then(|profile| {
+                let probe = SandboxLaunchRequest {
+                    app_id: manifest.app_id.clone(),
+                    display_name: manifest.display_name.clone(),
+                    executable_path: manifest.executable_path.clone(),
+                    sandbox_profile: profile,
+                    trust_level: manifest.trust_level.clone(),
+                    permission_context: HashMap::new(),
+                    launched_by: "inspection".to_string(),
+                };
+                SandboxRunner::build_policy(&probe).map(|_| "ok".to_string())
+            });
+
+        payload.insert(
+            "manifest_valid".to_string(),
+            manifest_validation.is_ok().to_string(),
+        );
+        payload.insert(
+            "executable_valid".to_string(),
+            executable_validation.is_ok().to_string(),
+        );
+        payload.insert(
+            "profile_valid".to_string(),
+            profile_validation.is_ok().to_string(),
+        );
+        payload.insert(
+            "manifest_validation_reason".to_string(),
+            manifest_validation.err().unwrap_or_default(),
+        );
+        payload.insert(
+            "executable_validation_reason".to_string(),
+            executable_validation.err().unwrap_or_default(),
+        );
+        payload.insert(
+            "profile_validation_reason".to_string(),
+            profile_validation.err().unwrap_or_default(),
+        );
+    }
+
+    fn security_payload(
+        status: &str,
+        message: &str,
+        app_id: &str,
+        reason: &str,
+        next_action: &str,
+        sandbox_profile: &str,
+    ) -> HashMap<String, String> {
+        let mut payload = Self::build_terminal_payload(status, message, app_id, "", reason, next_action);
+        payload.insert("security_outcome".to_string(), reason.to_string());
+        payload.insert("sandbox_profile".to_string(), sandbox_profile.to_string());
+        payload
+    }
+
     pub fn new(manifests: ManifestRegistry, audit: LauncherAuditLogger) -> Self {
         Self {
             manifests,
@@ -344,34 +404,54 @@ impl LauncherApi {
             &manifest.sandbox_profile,
             "received",
         );
-        if manifest.sandbox_profile.trim().is_empty() {
+        let _ = self.audit.log_process_spawn(
+            app_id,
+            "manifest_validation_begin",
+            "pending",
+            &format!("profile={} executable={}", manifest.sandbox_profile, manifest.executable_path),
+        );
+        if let Err(reason) = manifest.validate_for_launch() {
+            let _ = self.audit.log_process_spawn(
+                app_id,
+                "manifest_validation_failed",
+                "manifest_invalid",
+                &reason,
+            );
             let _ = self.audit.log_launch_history(
                 app_id,
-                "launch_denied",
+                "controlled_launch_denied",
                 manifest.trust_level.as_str(),
                 "deny",
-                "missing",
-                "sandbox_profile_missing",
+                &manifest.sandbox_profile,
+                &format!("manifest_invalid:{reason}"),
             );
-            return Ok(Self::build_terminal_payload(
-                "deny",
-                "launch denied: sandbox profile не задан",
+            return Ok(Self::security_payload(
+                "manifest_invalid",
+                &format!("Запуск {} заблокирован: manifest невалиден ({})", app_id, reason),
                 app_id,
-                "",
-                "sandbox_profile_missing",
+                "manifest_invalid",
                 "fix_manifest",
+                &manifest.sandbox_profile,
             ));
         }
+        let _ = self.audit.log_process_spawn(app_id, "manifest_validation_ok", "ok", "");
 
         let launched_by = Self::resolve_launched_by(sender).await;
         let mut pending_prompt: Option<HashMap<String, String>> = None;
         let mut permission_context = HashMap::new();
 
+        let _ = self.audit.log_process_spawn(app_id, "permission_gate_begin", "pending", "");
         for permission in &manifest.requested_permissions {
             let status = Self::check_permission(app_id, permission).await?;
             permission_context.insert(permission.clone(), status.clone());
 
             if status == "deny" {
+                let _ = self.audit.log_process_spawn(
+                    app_id,
+                    "permission_gate_deny",
+                    "deny",
+                    permission,
+                );
                 let _ = self.audit.log_launch_history(
                     app_id,
                     "launch_denied",
@@ -391,6 +471,12 @@ impl LauncherApi {
             }
 
             if status == "prompt" {
+                let _ = self.audit.log_process_spawn(
+                    app_id,
+                    "permission_gate_prompt",
+                    "prompt",
+                    permission,
+                );
                 let payload = Self::request_permission(app_id, permission).await?;
                 pending_prompt = Some(Self::build_prompt_payload(payload, &manifest, permission));
                 let _ = self.audit.log_launch_history(
@@ -408,23 +494,124 @@ impl LauncherApi {
         if let Some(payload) = pending_prompt {
             return Ok(payload);
         }
+        let _ = self.audit.log_process_spawn(app_id, "permission_gate_allow", "allow", "");
+
+        let _ = self.audit.log_process_spawn(
+            app_id,
+            "sandbox_profile_validation_begin",
+            "pending",
+            &manifest.sandbox_profile,
+        );
+        let validated_profile = match validate_profile_name(&manifest.sandbox_profile) {
+            Ok(profile) => profile,
+            Err(reason) => {
+                let _ = self.audit.log_process_spawn(
+                    app_id,
+                    "sandbox_profile_validation_failed",
+                    "profile_invalid",
+                    &reason,
+                );
+                let _ = self.audit.log_launch_history(
+                    app_id,
+                    "controlled_launch_denied",
+                    manifest.trust_level.as_str(),
+                    "deny",
+                    &manifest.sandbox_profile,
+                    &format!("profile_invalid:{reason}"),
+                );
+                return Ok(Self::security_payload(
+                    "profile_invalid",
+                    &format!("Запуск {} заблокирован: sandbox profile невалиден ({})", app_id, reason),
+                    app_id,
+                    "profile_invalid",
+                    "fix_manifest",
+                    &manifest.sandbox_profile,
+                ));
+            }
+        };
+        let profile_request = SandboxLaunchRequest {
+            app_id: app_id.to_string(),
+            display_name: manifest.display_name.clone(),
+            executable_path: manifest.executable_path.clone(),
+            sandbox_profile: validated_profile.clone(),
+            trust_level: manifest.trust_level.clone(),
+            permission_context: permission_context.clone(),
+            launched_by: launched_by.clone(),
+        };
+        if let Err(reason) = SandboxRunner::build_policy(&profile_request) {
+            let _ = self.audit.log_process_spawn(
+                app_id,
+                "sandbox_profile_validation_failed",
+                "profile_invalid",
+                &reason,
+            );
+            let _ = self.audit.log_launch_history(
+                app_id,
+                "controlled_launch_denied",
+                manifest.trust_level.as_str(),
+                "deny",
+                &validated_profile,
+                &format!("profile_invalid:{reason}"),
+            );
+            return Ok(Self::security_payload(
+                "profile_invalid",
+                &format!("Запуск {} заблокирован: sandbox policy невалидна ({})", app_id, reason),
+                app_id,
+                "profile_invalid",
+                "review_profile_policy",
+                &validated_profile,
+            ));
+        }
+        let _ = self.audit.log_process_spawn(app_id, "sandbox_profile_validation_ok", "ok", &validated_profile);
+
+        let _ = self.audit.log_process_spawn(
+            app_id,
+            "executable_validation_begin",
+            "pending",
+            &manifest.executable_path,
+        );
+        if let Err(reason) = manifest.validate_executable() {
+            let _ = self.audit.log_process_spawn(
+                app_id,
+                "executable_validation_failed",
+                "executable_invalid",
+                &reason,
+            );
+            let _ = self.audit.log_launch_history(
+                app_id,
+                "controlled_launch_denied",
+                manifest.trust_level.as_str(),
+                "deny",
+                &validated_profile,
+                &format!("executable_invalid:{reason}"),
+            );
+            return Ok(Self::security_payload(
+                "executable_invalid",
+                &format!("Запуск {} заблокирован: executable невалиден ({})", app_id, reason),
+                app_id,
+                "executable_invalid",
+                "fix_executable_path",
+                &validated_profile,
+            ));
+        }
+        let _ = self.audit.log_process_spawn(app_id, "executable_validation_ok", "ok", "");
 
         let request = SandboxLaunchRequest {
             app_id: app_id.to_string(),
             display_name: manifest.display_name.clone(),
             executable_path: manifest.executable_path.clone(),
-            sandbox_profile: manifest.sandbox_profile.clone(),
+            sandbox_profile: validated_profile.clone(),
             trust_level: manifest.trust_level.clone(),
             permission_context: permission_context.clone(),
             launched_by,
         };
         let _ = self.audit.log_process_spawn(
             app_id,
-            "process_spawn_begin",
+            "controlled_launch_begin",
             "pending",
             &format!(
                 "profile={} executable={}",
-                manifest.sandbox_profile, manifest.executable_path
+                validated_profile, manifest.executable_path
             ),
         );
 
@@ -433,31 +620,31 @@ impl LauncherApi {
             Err(err) => {
                 let _ = self.audit.log_process_spawn(
                     app_id,
-                    "process_spawn_failed",
-                    "failed",
+                    "controlled_launch_failed",
+                    "sandbox_failed",
                     &err,
                 );
                 let _ = self.audit.log_launch_history(
                     app_id,
-                    "launch_denied",
+                    "controlled_launch_failed",
                     manifest.trust_level.as_str(),
                     "failed",
-                    &manifest.sandbox_profile,
+                    &validated_profile,
                     &format!("sandbox_error:{err}"),
                 );
-                return Ok(Self::build_terminal_payload(
-                    "failed",
+                return Ok(Self::security_payload(
+                    "sandbox_failed",
                     &format!("Запуск {} завершился ошибкой: {}", app_id, err),
                     app_id,
-                    "",
-                    "process_spawn_failed",
+                    "sandbox_failed",
                     "inspect_failure_reason",
+                    &validated_profile,
                 ));
             }
         };
         let _ = self.audit.log_process_spawn(
             app_id,
-            "process_spawn_ok",
+            "controlled_launch_ok",
             "launched",
             &format!(
                 "pid={} sandbox_id={}",
@@ -475,7 +662,7 @@ impl LauncherApi {
             "launch_allowed",
             manifest.trust_level.as_str(),
             "allow",
-            &manifest.sandbox_profile,
+            &validated_profile,
             "started",
         );
         let crate::sandbox::SandboxLaunchResult {
@@ -502,11 +689,12 @@ impl LauncherApi {
             "message".to_string(),
             format!(
                 "{} запущено через secure launcher v2, pid={}, profile={}, source={}",
-                app_id, identity.pid, manifest.sandbox_profile, identity.launched_by
+                app_id, identity.pid, validated_profile, identity.launched_by
             ),
         );
         payload.insert("required_permission".to_string(), String::new());
         payload.insert("reason".to_string(), "all_permissions_satisfied".to_string());
+        payload.insert("security_outcome".to_string(), "launch_allowed".to_string());
         payload.insert("next_action".to_string(), "none".to_string());
         payload.insert("sandbox".to_string(), "bwrap".to_string());
         payload.insert("trust_level".to_string(), manifest.trust_level.as_str().to_string());
@@ -533,6 +721,7 @@ impl LauncherApi {
             zbus::fdo::Error::Failed(format!("app manifest not found for {app_id}"))
         })?;
         let mut payload = manifest.to_map();
+        Self::enrich_manifest_security(manifest, &mut payload);
         let tracker = self.tracker.lock().await;
         payload.insert(
             "running_instances".to_string(),
@@ -565,6 +754,7 @@ impl LauncherApi {
         let tracker = self.tracker.lock().await;
         for manifest in self.manifests.list() {
             let mut payload = manifest.to_map();
+            Self::enrich_manifest_security(&manifest, &mut payload);
             payload.insert(
                 "running_instances".to_string(),
                 tracker.running_for_app(&manifest.app_id).to_string(),

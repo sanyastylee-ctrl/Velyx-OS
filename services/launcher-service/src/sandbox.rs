@@ -93,11 +93,8 @@ impl SandboxRunner {
     }
 
     pub fn build_policy(request: &SandboxLaunchRequest) -> Result<SandboxPolicy, String> {
-        let profile_name = if request.sandbox_profile.is_empty() {
-            "minimal".to_string()
-        } else {
-            request.sandbox_profile.clone()
-        };
+        let profile_name = normalized_profile_name(&request.sandbox_profile)?;
+        validate_profile_for_request(&profile_name, &request.trust_level)?;
         let profile_defaults = profile_defaults(&profile_name)?;
         let mut visible_host_paths = Vec::new();
 
@@ -234,6 +231,32 @@ impl SandboxRunner {
             filtered_env: allowed_env,
             child,
         })
+    }
+}
+
+pub fn validate_profile_name(profile: &str) -> Result<String, String> {
+    let normalized = normalized_profile_name(profile)?;
+    let _ = profile_defaults(&normalized)?;
+    Ok(normalized)
+}
+
+fn normalized_profile_name(profile: &str) -> Result<String, String> {
+    let normalized = profile.trim();
+    if normalized.is_empty() {
+        return Err("sandbox_profile_missing".to_string());
+    }
+    Ok(normalized.to_string())
+}
+
+fn validate_profile_for_request(profile: &str, trust_level: &TrustLevel) -> Result<(), String> {
+    match profile {
+        "trusted-system" if !matches!(trust_level, TrustLevel::System) => {
+            Err("sandbox_profile_requires_system_trust".to_string())
+        }
+        "browser" | "files" | "desktop-basic" if matches!(trust_level, TrustLevel::Unknown) => {
+            Err("sandbox_profile_requires_trusted_app".to_string())
+        }
+        _ => Ok(()),
     }
 }
 

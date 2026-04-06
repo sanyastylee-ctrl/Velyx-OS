@@ -798,8 +798,13 @@ void PermissionClient::requestLaunchFromLauncher(
         return;
     }
 
-    if (status == "failed") {
-        updateLaunchState("error", payload.value("message").toString());
+    if (status == "failed"
+        || status == "sandbox_failed"
+        || status == "security_failed"
+        || status == "manifest_invalid"
+        || status == "executable_invalid"
+        || status == "profile_invalid") {
+        updateLaunchState(status, payload.value("message").toString());
         updateStatusDetails("launch_failed", status, reason, nextAction);
         refreshSelectedAppRuntime();
         return;
