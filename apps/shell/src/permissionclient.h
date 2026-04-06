@@ -57,6 +57,15 @@ class PermissionClient : public QObject
     Q_PROPERTY(double aiSuggestionConfidence READ aiSuggestionConfidence NOTIFY aiStateChanged)
     Q_PROPERTY(bool aiSuggestionAvailable READ aiSuggestionAvailable NOTIFY aiStateChanged)
     Q_PROPERTY(QString aiLastError READ aiLastError NOTIFY aiStateChanged)
+    Q_PROPERTY(QString assistantMode READ assistantMode NOTIFY assistantStateChanged)
+    Q_PROPERTY(QString assistantExecutionStatus READ assistantExecutionStatus NOTIFY assistantStateChanged)
+    Q_PROPERTY(QString assistantLastRequest READ assistantLastRequest NOTIFY assistantStateChanged)
+    Q_PROPERTY(QString assistantLastResponse READ assistantLastResponse NOTIFY assistantStateChanged)
+    Q_PROPERTY(bool assistantPendingApproval READ assistantPendingApproval NOTIFY assistantStateChanged)
+    Q_PROPERTY(QString assistantPendingRequestId READ assistantPendingRequestId NOTIFY assistantStateChanged)
+    Q_PROPERTY(QString assistantPendingSummary READ assistantPendingSummary NOTIFY assistantStateChanged)
+    Q_PROPERTY(QString assistantPendingDetails READ assistantPendingDetails NOTIFY assistantStateChanged)
+    Q_PROPERTY(QVariantList assistantHistory READ assistantHistory NOTIFY assistantStateChanged)
     Q_PROPERTY(QString activeSpaceId READ activeSpaceId NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceName READ activeSpaceName NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceState READ activeSpaceState NOTIFY spacesChanged)
@@ -73,6 +82,7 @@ public:
     Q_INVOKABLE void refreshRules();
     Q_INVOKABLE void refreshAgentState();
     Q_INVOKABLE void refreshAiState();
+    Q_INVOKABLE void refreshAssistantState();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
     Q_INVOKABLE void selectActiveApp(const QString &appId);
@@ -103,6 +113,10 @@ public:
     Q_INVOKABLE void applyAiSuggestion();
     Q_INVOKABLE void dismissAiSuggestion();
     Q_INVOKABLE void blockAiSuggestion();
+    Q_INVOKABLE void askAssistant(const QString &query);
+    Q_INVOKABLE void approveAssistant(const QString &requestId);
+    Q_INVOKABLE void denyAssistant(const QString &requestId);
+    Q_INVOKABLE void setAssistantMode(const QString &mode);
     void setInputControlMode(const QString &mode, const QString &details);
 
     QVariantList apps() const;
@@ -152,6 +166,15 @@ public:
     double aiSuggestionConfidence() const;
     bool aiSuggestionAvailable() const;
     QString aiLastError() const;
+    QString assistantMode() const;
+    QString assistantExecutionStatus() const;
+    QString assistantLastRequest() const;
+    QString assistantLastResponse() const;
+    bool assistantPendingApproval() const;
+    QString assistantPendingRequestId() const;
+    QString assistantPendingSummary() const;
+    QString assistantPendingDetails() const;
+    QVariantList assistantHistory() const;
     QString activeSpaceId() const;
     QString activeSpaceName() const;
     QString activeSpaceState() const;
@@ -179,6 +202,7 @@ signals:
     void inputStatusChanged();
     void agentStateChanged();
     void aiStateChanged();
+    void assistantStateChanged();
 
 private:
     QVariantMap cachedAppInfo(const QString &appId) const;
@@ -254,6 +278,15 @@ private:
     double m_aiSuggestionConfidence {0.0};
     bool m_aiSuggestionAvailable {false};
     QString m_aiLastError;
+    QString m_assistantMode {"suggest"};
+    QString m_assistantExecutionStatus {"idle"};
+    QString m_assistantLastRequest;
+    QString m_assistantLastResponse;
+    bool m_assistantPendingApproval {false};
+    QString m_assistantPendingRequestId;
+    QString m_assistantPendingSummary;
+    QString m_assistantPendingDetails;
+    QVariantList m_assistantHistory;
     QString m_activeSpaceId;
     QString m_activeSpaceName;
     QString m_activeSpaceState {"unknown"};

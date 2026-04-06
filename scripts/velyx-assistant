@@ -1,0 +1,1001 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.parse
+import urllib.request
+import uuid
+from dataclasses import dataclass, asdict
+from datetime import datetime, timezone
+from html import unescape
+from pathlib import Path
+from typing import Any, Optional
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+AI_CONFIG = STATE_DIR / "ai_config.json"
+AI_STATE = STATE_DIR / "ai_state.json"
+ASSISTANT_CONFIG = STATE_DIR / "assistant_config.json"
+ASSISTANT_STATE = STATE_DIR / "assistant_state.json"
+ASSISTANT_LOG = STATE_DIR / "assistant.log"
+ASSISTANT_FEEDBACK = STATE_DIR / "assistant_feedback.jsonl"
+UPDATE_STATE = STATE_DIR / "update_state.json"
+SESSION_STATE = STATE_DIR / "session_state.json"
+INTENT_STATE = STATE_DIR / "intent_state.json"
+RULES_STATE = STATE_DIR / "rules_state.json"
+AGENT_STATE = STATE_DIR / "agent_state.json"
+SPACES_REGISTRY = Path(ENV.get("VELYX_SPACES_REGISTRY") or (STATE_DIR / "spaces_registry.json"))
+INTENTS_REGISTRY = Path(ENV.get("VELYX_INTENTS_REGISTRY") or (STATE_DIR / "intents_registry.json"))
+RULES_REGISTRY = Path(ENV.get("VELYX_RULES_REGISTRY") or (STATE_DIR / "rules_registry.json"))
+APP_REGISTRY = Path(ENV.get("VELYX_APP_REGISTRY") or (STATE_DIR / "apps_registry.json"))
+INSTALL_PREFIX = Path(os.environ.get("VELYX_INSTALL_PREFIX") or ENV.get("VELYX_INSTALL_PREFIX") or (Path.home() / ".local/share/velyx"))
+VERSION_FILE = INSTALL_PREFIX / "share" / "version.txt"
+HOME = Path.home()
+DEFAULT_ALLOWED_ROOTS = [
+    HOME / "Documents",
+    HOME / "Desktop",
+    HOME / "Downloads",
+    STATE_DIR,
+    Path.cwd(),
+]
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+    return default
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    for attempt in range(6):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt >= 5:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
+def print_json(payload: Any) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with ASSISTANT_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def feedback(event: str, payload: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with ASSISTANT_FEEDBACK.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"timestamp": now_iso(), "event": event, **payload}, ensure_ascii=False) + "\n")
+
+
+def truncate(text: str, limit: int = 280) -> str:
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rstrip() + "…"
+
+
+def strip_html(text: str) -> str:
+    text = re.sub(r"(?is)<script.*?>.*?</script>", " ", text)
+    text = re.sub(r"(?is)<style.*?>.*?</style>", " ", text)
+    text = re.sub(r"(?is)<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", unescape(text)).strip()
+
+
+def load_ai_config() -> dict:
+    payload = read_json(AI_CONFIG, {})
+    if not payload:
+        payload = {"enabled": False, "mode": "off", "provider": "local", "model_family": "qwen", "model_name": "qwen3.5-9b"}
+        save_json(AI_CONFIG, payload)
+    return payload
+
+
+def ensure_ai_mode(mode: Optional[str] = None) -> str:
+    config = load_ai_config()
+    if mode is not None:
+        config["mode"] = mode
+        config["enabled"] = mode != "off"
+        save_json(AI_CONFIG, config)
+    return config.get("mode", "off")
+
+
+def ensure_config() -> dict:
+    payload = read_json(ASSISTANT_CONFIG, {})
+    defaults = {
+        "enabled": True,
+        "mode": "suggest",
+        "interaction_mode": "interactive",
+        "network_access": "ask",
+        "allowed_roots": [str(path) for path in DEFAULT_ALLOWED_ROOTS],
+        "history_limit": 24,
+        "provider": "local",
+        "model_family": "qwen",
+        "model_name": "qwen3.5-9b",
+        "endpoint_type": "stub",
+        "endpoint_url": "http://127.0.0.1:11434/api/chat",
+        "timeout_ms": 12000,
+        "benign_search_without_approval": True,
+        "confirm_write_actions": True,
+        "confirm_destructive_actions": True,
+    }
+    changed = False
+    for key, value in defaults.items():
+        if key not in payload:
+            payload[key] = value
+            changed = True
+    payload["mode"] = ensure_ai_mode(payload.get("mode", "suggest"))
+    if changed or not ASSISTANT_CONFIG.exists():
+        save_json(ASSISTANT_CONFIG, payload)
+    return payload
+
+
+def default_result_envelope() -> dict:
+    return {
+        "status": "ok",
+        "summary": "",
+        "details": "",
+        "actions_taken": [],
+        "pending_action": {},
+        "sources": [],
+        "artifacts": [],
+    }
+
+
+def ensure_state() -> dict:
+    payload = read_json(ASSISTANT_STATE, {})
+    defaults = {
+        "history": [],
+        "last_user_request": "",
+        "last_assistant_response": "",
+        "last_tool_result": {},
+        "last_result": default_result_envelope(),
+        "last_plan": [],
+        "pending_approval": {},
+        "current_execution_status": "idle",
+        "last_run_at": "",
+        "mode": ensure_ai_mode(),
+        "network_access": ensure_config().get("network_access", "ask"),
+    }
+    changed = False
+    for key, value in defaults.items():
+        if key not in payload:
+            payload[key] = value
+            changed = True
+    if changed or not ASSISTANT_STATE.exists():
+        save_json(ASSISTANT_STATE, payload)
+    return payload
+
+
+def add_history_entry(state: dict, role: str, text: str, extra: Optional[dict] = None) -> None:
+    entry = {"role": role, "text": text, "timestamp": now_iso()}
+    if extra:
+        entry.update(extra)
+    history = list(state.get("history", []))
+    history.append(entry)
+    limit = ensure_config().get("history_limit", 24)
+    state["history"] = history[-limit:]
+
+
+def context_snapshot() -> dict:
+    session = read_json(SESSION_STATE, {})
+    update = read_json(UPDATE_STATE, {})
+    ai_state = read_json(AI_STATE, {})
+    intent_state = read_json(INTENT_STATE, {})
+    rules_state = read_json(RULES_STATE, {})
+    agent_state = read_json(AGENT_STATE, {})
+    spaces = read_json(SPACES_REGISTRY, {})
+    apps_registry = read_json(APP_REGISTRY, {})
+    running_apps = []
+    failed_apps = []
+    for app in session.get("apps", []):
+        app_id = app.get("app_id", "")
+        state = app.get("state", "")
+        if state in {"running", "ready"}:
+            running_apps.append(app_id)
+        if state in {"failed", "broken"}:
+            failed_apps.append(app_id)
+    active_space_id = spaces.get("active_space_id", "")
+    active_space = {}
+    for entry in spaces.get("spaces", []):
+        if entry.get("space_id") == active_space_id:
+            active_space = entry
+            break
+    installed_apps = []
+    for entry in apps_registry.get("apps", apps_registry if isinstance(apps_registry, list) else []):
+        if isinstance(entry, dict) and entry.get("status") != "removed":
+            installed_apps.append(
+                {
+                    "app_id": entry.get("app_id"),
+                    "display_name": entry.get("display_name"),
+                    "status": entry.get("status"),
+                    "trust_level": entry.get("trust_level"),
+                    "version": entry.get("version"),
+                }
+            )
+    return {
+        "current_version": update.get("current_version") or VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.exists() else "",
+        "active_space": active_space_id,
+        "active_space_name": active_space.get("display_name", ""),
+        "active_space_state": session.get("active_space_state", active_space.get("runtime_state", "unknown")),
+        "session_state": session.get("session_state", "unknown"),
+        "session_health": session.get("session_health", "unknown"),
+        "recovery_needed": bool(update.get("recovery_needed", False)),
+        "update_state": update.get("update_state", "unknown"),
+        "last_update_result": update.get("last_update_result", ""),
+        "running_apps": running_apps,
+        "failed_apps": failed_apps,
+        "last_intent": intent_state.get("last_intent_id", ""),
+        "last_rule": rules_state.get("last_rule_id", ""),
+        "last_agent_action": agent_state.get("last_action", ""),
+        "top_available_intents": [intent.get("intent_id") for intent in read_json(INTENTS_REGISTRY, {}).get("intents", [])[:5]],
+        "top_available_rules": [rule.get("rule_id") for rule in read_json(RULES_REGISTRY, {}).get("rules", [])[:5]],
+        "mode": active_space.get("security_mode", ""),
+        "installed_apps": installed_apps[:10],
+        "ai_mode": ai_state.get("current_mode", ensure_ai_mode()),
+    }
+
+
+@dataclass
+class ToolSpec:
+    tool_id: str
+    display_name: str
+    category: str
+    description: str
+    required_permissions: list[str]
+    confirmation_policy: str
+    execution_mode: str
+    allowed_in_modes: list[str]
+    input_schema: dict
+    output_schema: dict
+
+
+@dataclass
+class PlanStep:
+    tool_id: str
+    payload: dict
+    reason: str
+
+
+class ToolRegistry:
+    def __init__(self) -> None:
+        self.tools: dict[str, ToolSpec] = {}
+        self._register_defaults()
+
+    def register(self, spec: ToolSpec) -> None:
+        self.tools[spec.tool_id] = spec
+
+    def get(self, tool_id: str) -> ToolSpec:
+        return self.tools[tool_id]
+
+    def _register_defaults(self) -> None:
+        entries = [
+            ("run_intent", "Run intent", "system", "Execute a safe intent via operator layer", [], "never"),
+            ("activate_space", "Activate space", "system", "Switch active space", [], "never"),
+            ("launch_app", "Launch app", "system", "Launch application safely", [], "never"),
+            ("stop_app", "Stop app", "system", "Stop running application", [], "ask_once"),
+            ("restart_app", "Restart app", "system", "Restart running application", [], "ask_once"),
+            ("restart_runtime", "Restart runtime", "system", "Restart Velyx runtime", [], "ask_once"),
+            ("run_update", "Run update", "system", "Start system update", [], "ask_once"),
+            ("enter_recovery", "Enter recovery", "system", "Move system into recovery", [], "ask_once"),
+            ("get_system_status", "System status", "system", "Read current system status", [], "never"),
+            ("get_space_status", "Space status", "system", "Read active space state", [], "never"),
+            ("get_running_apps", "Running apps", "system", "Read running apps", [], "never"),
+            ("get_logs_summary", "Logs summary", "system", "Summarize recent logs", [], "never"),
+            ("read_file", "Read file", "file", "Read a text file", [], "never"),
+            ("write_file", "Write file", "file", "Overwrite a file", [], "ask_once"),
+            ("create_file", "Create file", "file", "Create a new file", [], "ask_once"),
+            ("append_file", "Append file", "file", "Append to a file", [], "ask_once"),
+            ("list_directory", "List directory", "file", "List files in a directory", [], "never"),
+            ("find_files", "Find files", "file", "Search files by query", [], "never"),
+            ("save_note", "Save note", "file", "Create a note file", [], "ask_once"),
+            ("web_search", "Web search", "web", "Search the web", [], "policy_based"),
+            ("fetch_url", "Fetch URL", "web", "Fetch a public page", [], "policy_based"),
+            ("github_search", "GitHub search", "web", "Search GitHub", [], "policy_based"),
+            ("docs_lookup", "Docs lookup", "web", "Look up documentation", [], "policy_based"),
+            ("release_notes_lookup", "Release notes lookup", "web", "Look up release notes", [], "policy_based"),
+            ("webpage_summary", "Web page summary", "web", "Summarize a page", [], "policy_based"),
+            ("summarize_text", "Summarize text", "content", "Summarize content", [], "never"),
+            ("explain_error", "Explain error", "content", "Explain a failure", [], "never"),
+            ("draft_text", "Draft text", "content", "Draft simple text", [], "never"),
+            ("generate_plan", "Generate plan", "content", "Generate a short plan", [], "never"),
+            ("generate_ui_copy", "Generate UI copy", "content", "Generate product copy", [], "never"),
+            ("generate_icon_prompt", "Generate icon prompt", "content", "Generate icon prompt", [], "never"),
+            ("generate_image_request", "Generate image request", "content", "Generate image request", [], "never"),
+            ("get_update_status", "Update status", "productivity", "Read update status", [], "never"),
+            ("list_intents", "List intents", "productivity", "List intents", [], "never"),
+            ("list_rules", "List rules", "productivity", "List automation rules", [], "never"),
+            ("show_recovery_status", "Recovery status", "productivity", "Show recovery status", [], "never"),
+        ]
+        for tool_id, display_name, category, description, permissions, confirmation in entries:
+            self.register(
+                ToolSpec(
+                    tool_id=tool_id,
+                    display_name=display_name,
+                    category=category,
+                    description=description,
+                    required_permissions=permissions,
+                    confirmation_policy=confirmation,
+                    execution_mode="safe",
+                    allowed_in_modes=["off", "suggest", "auto", "manual"],
+                    input_schema={},
+                    output_schema={},
+                )
+            )
+
+
+class AssistantError(RuntimeError):
+    pass
+
+
+class ToolDispatcher:
+    def __init__(self, config: dict) -> None:
+        self.config = config
+
+    def _run(self, program: str, arguments: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
+        resolved_program = shutil.which(program)
+        if resolved_program is None:
+            local_script = Path(__file__).resolve().parent / program
+            if local_script.exists():
+                resolved_program = str(local_script)
+            else:
+                resolved_program = program
+        return subprocess.run(
+            [resolved_program, *arguments],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+
+    def _validate_path(self, path_value: str, for_write: bool = False) -> Path:
+        raw_path = Path(os.path.expanduser(path_value))
+        candidate = raw_path if raw_path.is_absolute() else (Path.cwd() / raw_path)
+        candidate = candidate.resolve()
+        allowed_roots = [Path(root).expanduser().resolve() for root in self.config.get("allowed_roots", [])]
+        if not any(str(candidate).startswith(str(root)) for root in allowed_roots):
+            raise AssistantError(f"Path is outside allowed roots: {candidate}")
+        if for_write:
+            candidate.parent.mkdir(parents=True, exist_ok=True)
+        return candidate
+
+    def _fetch_text(self, url: str) -> str:
+        request = urllib.request.Request(url, headers={"User-Agent": "VelyxAssistant/1.0"})
+        timeout = max(1, int(self.config.get("timeout_ms", 12000)) // 1000)
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
+
+    def _ensure_network_allowed(self, benign: bool) -> None:
+        policy = self.config.get("network_access", "ask")
+        if policy == "off":
+            raise AssistantError("Network access is disabled")
+        if policy == "ask" and not (benign and self.config.get("benign_search_without_approval", True)):
+            raise AssistantError("Network action requires approval")
+
+    def _web_search(self, query: str) -> dict:
+        self._ensure_network_allowed(benign=True)
+        encoded = urllib.parse.quote_plus(query)
+        html = self._fetch_text(f"https://duckduckgo.com/html/?q={encoded}")
+        matches = re.findall(
+            r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?<a[^>]+class="result__snippet"[^>]*>(.*?)</a>',
+            html,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        results = []
+        for href, title, snippet in matches[:5]:
+            clean_title = strip_html(title)
+            clean_snippet = strip_html(snippet)
+            if href.startswith("//"):
+                href = "https:" + href
+            results.append({"title": clean_title, "url": href, "snippet": clean_snippet})
+        if not results:
+            plain = strip_html(html)
+            if plain:
+                results.append({"title": query, "url": "", "snippet": truncate(plain, 220)})
+        summary_lines = [f"{index + 1}. {item['title']}: {item['snippet']}" for index, item in enumerate(results[:3])]
+        return {
+            "summary": "\n".join(summary_lines) if summary_lines else "No search results.",
+            "sources": results,
+            "details": f"Web search completed for '{query}'.",
+        }
+
+    def _fetch_url_summary(self, url: str) -> dict:
+        self._ensure_network_allowed(benign=True)
+        html = self._fetch_text(url)
+        text = strip_html(html)
+        return {
+            "summary": truncate(text, 520),
+            "sources": [{"title": url, "url": url, "snippet": truncate(text, 180)}],
+            "details": "Fetched page successfully.",
+        }
+
+    def dispatch(self, tool_id: str, payload: dict) -> dict:
+        if tool_id == "run_intent":
+            result = self._run("velyx-agent", ["run-intent", payload["intent_id"]], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or f"Failed to run intent {payload['intent_id']}")
+            return {"summary": result.stdout.strip() or f"Intent {payload['intent_id']} executed.", "artifacts": []}
+        if tool_id == "activate_space":
+            result = self._run("velyx-agent", ["switch-space", payload["space_id"]], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or f"Failed to switch to {payload['space_id']}")
+            return {"summary": result.stdout.strip() or f"Space {payload['space_id']} activated.", "artifacts": []}
+        if tool_id == "launch_app":
+            result = self._run("velyx-agent", ["launch-app", payload["app_id"]], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or f"Failed to launch {payload['app_id']}")
+            return {"summary": result.stdout.strip() or f"App {payload['app_id']} launched.", "artifacts": [{"type": "app", "value": payload["app_id"]}]}
+        if tool_id == "stop_app":
+            result = self._run("velyx-agent", ["stop-app", payload["app_id"]], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or f"Failed to stop {payload['app_id']}")
+            return {"summary": result.stdout.strip() or f"App {payload['app_id']} stopped.", "artifacts": [{"type": "app", "value": payload["app_id"]}]}
+        if tool_id == "restart_app":
+            result = self._run("velyx-agent", ["restart-app", payload["app_id"]], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or f"Failed to restart {payload['app_id']}")
+            return {"summary": result.stdout.strip() or f"App {payload['app_id']} restarted.", "artifacts": [{"type": "app", "value": payload["app_id"]}]}
+        if tool_id == "restart_runtime":
+            result = self._run("velyx-agent", ["command", "restart-runtime"], timeout=30)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to restart runtime")
+            return {"summary": result.stdout.strip() or "Runtime restart requested.", "artifacts": []}
+        if tool_id == "run_update":
+            result = self._run("velyx-agent", ["run-update"], timeout=120)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to run update")
+            return {"summary": result.stdout.strip() or "System update requested.", "artifacts": []}
+        if tool_id == "enter_recovery":
+            result = self._run("velyx-agent", ["enter-recovery"], timeout=30)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to enter recovery")
+            return {"summary": result.stdout.strip() or "Recovery requested.", "artifacts": []}
+        if tool_id == "get_system_status":
+            snapshot = context_snapshot()
+            summary = f"System is {snapshot['session_state']} / {snapshot['session_health']}; active space: {snapshot['active_space_name'] or snapshot['active_space'] or 'unknown'}; update: {snapshot['update_state']}."
+            return {"summary": summary, "details": json.dumps(snapshot, ensure_ascii=False), "snapshot": snapshot}
+        if tool_id == "get_space_status":
+            snapshot = context_snapshot()
+            return {"summary": f"Active space is {snapshot['active_space_name'] or snapshot['active_space'] or 'unknown'} with state {snapshot['active_space_state']}.", "details": json.dumps(snapshot, ensure_ascii=False)}
+        if tool_id == "get_running_apps":
+            snapshot = context_snapshot()
+            running = snapshot.get("running_apps", [])
+            return {"summary": "Running apps: " + (", ".join(running) if running else "none"), "details": json.dumps(running, ensure_ascii=False), "artifacts": [{"type": "apps", "value": running}]}
+        if tool_id == "get_logs_summary":
+            lines: list[str] = []
+            for path in [STATE_DIR / "launcher_history.log", STATE_DIR / "session_manager_audit.log", UPDATE_STATE]:
+                if not path.exists():
+                    continue
+                if path.suffix == ".json":
+                    lines.append(f"{path.name}: {truncate(json.dumps(read_json(path, {}), ensure_ascii=False), 220)}")
+                else:
+                    tail = path.read_text(encoding='utf-8', errors='replace').splitlines()[-8:]
+                    if tail:
+                        lines.append(f"{path.name}: {' | '.join(tail[-3:])}")
+            return {"summary": "\n".join(lines) if lines else "No recent logs found.", "details": ""}
+        if tool_id == "read_file":
+            path = self._validate_path(payload["path"])
+            if not path.exists():
+                raise AssistantError(f"File not found: {path}")
+            text = path.read_text(encoding="utf-8", errors="replace")
+            return {"summary": truncate(text, 800), "details": f"Read {path}", "artifacts": [{"type": "file", "value": str(path)}]}
+        if tool_id == "list_directory":
+            path = self._validate_path(payload["path"])
+            if not path.exists():
+                raise AssistantError(f"Directory not found: {path}")
+            if not path.is_dir():
+                raise AssistantError(f"Not a directory: {path}")
+            entries = sorted(item.name for item in path.iterdir())[:50]
+            return {"summary": "\n".join(entries) if entries else "Directory is empty.", "details": str(path)}
+        if tool_id == "find_files":
+            root = self._validate_path(payload.get("root") or str(Path.cwd()))
+            query = payload["query"].lower()
+            matches = []
+            for item in root.rglob("*"):
+                if item.is_file() and query in item.name.lower():
+                    matches.append(str(item))
+                if len(matches) >= 25:
+                    break
+            return {"summary": "\n".join(matches) if matches else "No matching files found.", "details": str(root)}
+        if tool_id in {"create_file", "write_file", "append_file", "save_note"}:
+            path = self._validate_path(payload["path"], for_write=True)
+            content = payload.get("content", "")
+            if tool_id == "append_file":
+                with path.open("a", encoding="utf-8") as fh:
+                    fh.write(content)
+            else:
+                path.write_text(content, encoding="utf-8")
+            return {"summary": f"Saved {path.name}.", "details": str(path), "artifacts": [{"type": "file", "value": str(path)}]}
+        if tool_id == "web_search":
+            return self._web_search(payload["query"])
+        if tool_id == "fetch_url":
+            return self._fetch_url_summary(payload["url"])
+        if tool_id == "github_search":
+            return self._web_search("site:github.com " + payload["query"])
+        if tool_id == "docs_lookup":
+            return self._web_search(f"site:doc.qt.io OR site:docs.rs OR site:doc.rust-lang.org {payload['query']}")
+        if tool_id == "release_notes_lookup":
+            return self._web_search(f"{payload['query']} release notes")
+        if tool_id == "webpage_summary":
+            return self._fetch_url_summary(payload["url"])
+        if tool_id == "summarize_text":
+            return {"summary": truncate(payload["text"], 420), "details": "Summary generated locally."}
+        if tool_id == "explain_error":
+            text = payload["text"]
+            explanation = "This looks like a runtime or configuration failure."
+            if "degraded" in text.lower():
+                explanation = "The system is running, but one or more required components are unavailable."
+            elif "recovery" in text.lower():
+                explanation = "Recovery is required because the last update or runtime transition did not complete cleanly."
+            elif "permission" in text.lower():
+                explanation = "The action was blocked by the current permission or security policy."
+            return {"summary": explanation, "details": truncate(text, 320)}
+        if tool_id == "draft_text":
+            return {"summary": payload.get("prompt", ""), "details": "Draft generated locally."}
+        if tool_id == "generate_plan":
+            return {"summary": "1. Review current state\n2. Apply the requested action\n3. Verify the result", "details": ""}
+        if tool_id == "generate_ui_copy":
+            return {"summary": "Ready. Continue work. Recovery required.", "details": ""}
+        if tool_id == "generate_icon_prompt":
+            return {"summary": f"Minimal icon concept for {payload.get('topic', 'the requested concept')}: dark base, cool cyan accent, calm operational feel.", "details": ""}
+        if tool_id == "generate_image_request":
+            return {"summary": f"Image request prepared for {payload.get('topic', 'the requested subject')}.", "details": ""}
+        if tool_id == "get_update_status":
+            update = read_json(UPDATE_STATE, {})
+            return {"summary": f"Update state: {update.get('update_state', 'unknown')}", "details": json.dumps(update, ensure_ascii=False)}
+        if tool_id == "list_intents":
+            intents = read_json(INTENTS_REGISTRY, {}).get("intents", [])
+            return {"summary": ", ".join(intent.get("intent_id", "") for intent in intents if intent.get("status") != "disabled") or "No intents available.", "details": ""}
+        if tool_id == "list_rules":
+            rules = read_json(RULES_REGISTRY, {}).get("rules", [])
+            return {"summary": ", ".join(rule.get("rule_id", "") for rule in rules if rule.get("enabled", True)) or "No rules available.", "details": ""}
+        if tool_id == "show_recovery_status":
+            update = read_json(UPDATE_STATE, {})
+            return {"summary": "Recovery needed." if update.get("recovery_needed") else "Recovery is not currently required.", "details": json.dumps(update, ensure_ascii=False)}
+        raise AssistantError(f"Unsupported tool: {tool_id}")
+
+
+class RequestParser:
+    def parse(self, query: str) -> dict:
+        text = query.strip()
+        lowered = text.lower()
+        return {
+            "raw": text,
+            "lowered": lowered,
+            "wants_browser": "браузер" in lowered or "browser" in lowered,
+            "wants_search": any(token in lowered for token in ["найди", "search", "what's new", "что нового", "покажи", "qt ide", "release notes", "где скачать", "find on the internet"]),
+            "wants_explain": any(token in lowered for token in ["объясни", "explain", "what's wrong", "что не так", "почему", "diagnostic", "диагност"]),
+            "wants_note": any(token in lowered for token in ["заметк", "note", "markdown", "сохрани", "создай файл"]),
+            "wants_switch_dev": "development" in lowered or "рабоч" in lowered or "dev" in lowered or "разработ" in lowered,
+            "wants_safe_web": "safe web" in lowered or "safe-web" in lowered or "безопасн" in lowered,
+            "wants_recovery": "recovery" in lowered or "восстанов" in lowered,
+            "wants_update": "update" in lowered or "обнов" in lowered,
+        }
+
+
+class PlanBuilder:
+    def __init__(self, parser: RequestParser) -> None:
+        self.parser = parser
+
+    def build(self, query: str) -> tuple[list[PlanStep], str]:
+        parsed = self.parser.parse(query)
+        lowered = parsed["lowered"]
+        steps: list[PlanStep] = []
+        summary = "Request prepared."
+
+        if parsed["wants_switch_dev"]:
+            steps.append(PlanStep("activate_space", {"space_id": "development"}, "Move into development context"))
+            summary = "Switching to development context."
+        elif parsed["wants_safe_web"]:
+            steps.append(PlanStep("activate_space", {"space_id": "safe-web"}, "Move into safe browsing context"))
+            summary = "Switching to safe browsing context."
+        elif parsed["wants_recovery"]:
+            steps.append(PlanStep("enter_recovery", {}, "Enter recovery mode"))
+            summary = "Preparing recovery."
+        elif parsed["wants_update"]:
+            steps.append(PlanStep("run_update", {}, "Run system update"))
+            summary = "Preparing system update."
+
+        if "dev_start" in lowered or "start development" in lowered:
+            steps.append(PlanStep("run_intent", {"intent_id": "dev_start"}, "Start development intent"))
+            summary = "Starting development."
+        elif "safe_browse" in lowered or "safe browse" in lowered:
+            steps.append(PlanStep("run_intent", {"intent_id": "safe_browse"}, "Start safe browsing intent"))
+            summary = "Starting safe browsing."
+        elif "general_use" in lowered or "continue work" in lowered:
+            steps.append(PlanStep("run_intent", {"intent_id": "general_use"}, "Return to general context"))
+
+        if parsed["wants_browser"] and not any(step.tool_id == "launch_app" and step.payload.get("app_id") == "com.velyx.browser" for step in steps):
+            steps.append(PlanStep("launch_app", {"app_id": "com.velyx.browser"}, "Open the browser"))
+            summary = "Opening the browser."
+
+        if parsed["wants_explain"] and not steps:
+            steps.append(PlanStep("get_system_status", {}, "Read the current system status"))
+            steps.append(PlanStep("get_logs_summary", {}, "Check recent logs"))
+            steps.append(PlanStep("explain_error", {"text": query}, "Explain the current issue"))
+            summary = "Explaining the current system state."
+
+        search_query = ""
+        if parsed["wants_search"]:
+            search_query = re.sub(r"^(открой браузер и|найди|покажи|что нового в|show|search)\s+", "", query.strip(), flags=re.IGNORECASE)
+            search_query = search_query.strip() or query.strip()
+            if "release notes" in lowered or "релиз" in lowered:
+                steps.append(PlanStep("release_notes_lookup", {"query": search_query}, "Look up release notes"))
+            elif "github" in lowered:
+                steps.append(PlanStep("github_search", {"query": search_query}, "Search GitHub"))
+            elif "doc" in lowered or "докум" in lowered or "qt" in lowered:
+                steps.append(PlanStep("docs_lookup", {"query": search_query}, "Look up documentation"))
+            else:
+                steps.append(PlanStep("web_search", {"query": search_query}, "Search the web"))
+            summary = f"Looking up information for: {search_query}"
+
+        if parsed["wants_note"]:
+            note_name_match = re.search(r"([A-Za-z0-9_-]+)\.md", query)
+            note_name = note_name_match.group(1) + ".md" if note_name_match else "velyx-notes.md"
+            content = "# Notes\n\n"
+            if search_query:
+                content += f"Query: {search_query}\n\n"
+            content += "Created by Velyx Assistant.\n"
+            note_path = str((HOME / "Documents" / note_name))
+            steps.append(PlanStep("create_file", {"path": note_path, "content": content}, "Create a note file"))
+            summary = f"Preparing a note at {note_path}."
+
+        if not steps:
+            if any(token in lowered for token in ["status", "summary", "summarize", "сводк", "система", "system state"]):
+                steps.append(PlanStep("get_system_status", {}, "Read the current system status"))
+                summary = "Collecting system status."
+            else:
+                steps.append(PlanStep("draft_text", {"prompt": query}, "Draft a helpful response"))
+                summary = "Preparing a response."
+        return steps, summary
+
+
+class ResultSynthesizer:
+    def synthesize(self, query: str, step_results: list[dict]) -> dict:
+        envelope = default_result_envelope()
+        if not step_results:
+            envelope["status"] = "failed"
+            envelope["summary"] = "Nothing was executed."
+            return envelope
+        summaries = [result.get("summary", "") for result in step_results if result.get("summary")]
+        details = [result.get("details", "") for result in step_results if result.get("details")]
+        actions = [result.get("action", "") for result in step_results if result.get("action")]
+        artifacts: list[dict] = []
+        sources: list[dict] = []
+        for result in step_results:
+            artifacts.extend(result.get("artifacts", []))
+            sources.extend(result.get("sources", []))
+        envelope["summary"] = summaries[-1] if summaries else f"Handled request: {query}"
+        envelope["details"] = "\n".join([detail for detail in details if detail][:4])
+        envelope["actions_taken"] = [action for action in actions if action]
+        envelope["sources"] = sources[:5]
+        envelope["artifacts"] = artifacts[:10]
+        return envelope
+
+
+class AssistantBackend:
+    def __init__(self) -> None:
+        self.config = ensure_config()
+        self.state = ensure_state()
+        self.registry = ToolRegistry()
+        self.dispatcher = ToolDispatcher(self.config)
+        self.parser = RequestParser()
+        self.planner = PlanBuilder(self.parser)
+        self.synthesizer = ResultSynthesizer()
+
+    def _save(self) -> None:
+        self.state["mode"] = ensure_ai_mode()
+        self.state["network_access"] = self.config.get("network_access", "ask")
+        save_json(ASSISTANT_STATE, self.state)
+
+    def _requires_approval(self, tool_id: str, payload: dict) -> bool:
+        spec = self.registry.get(tool_id)
+        if spec.confirmation_policy == "ask_once":
+            return True
+        if spec.confirmation_policy == "policy_based" and self.config.get("network_access", "ask") == "ask":
+            if tool_id in {"web_search", "fetch_url", "github_search", "docs_lookup", "release_notes_lookup", "webpage_summary"}:
+                return not self.config.get("benign_search_without_approval", True)
+        if tool_id in {"stop_app", "restart_app", "restart_runtime", "run_update", "enter_recovery"} and self.config.get("confirm_destructive_actions", True):
+            return True
+        if tool_id in {"create_file", "write_file", "append_file", "save_note"} and self.config.get("confirm_write_actions", True):
+            return True
+        return False
+
+    def _store_pending(self, query: str, steps: list[PlanStep], summary: str, completed_results: Optional[list[dict]] = None) -> dict:
+        request_id = uuid.uuid4().hex[:10]
+        first = steps[0]
+        pending = {
+            "request_id": request_id,
+            "query": query,
+            "summary": summary,
+            "step": asdict(first),
+            "remaining_plan": [asdict(step) for step in steps],
+            "created_at": now_iso(),
+        }
+        self.state["pending_approval"] = pending
+        self.state["current_execution_status"] = "needs_approval"
+        if completed_results:
+            result = self.synthesizer.synthesize(query, completed_results)
+            result["status"] = "needs_approval"
+            result["summary"] = f"{result['summary']} I can also {first.reason.lower()}. Allow it?"
+            result["details"] = summary
+        else:
+            result = default_result_envelope()
+            result["status"] = "needs_approval"
+            result["summary"] = f"I can {first.reason.lower()}. Allow it?"
+            result["details"] = summary
+        result["pending_action"] = {"request_id": request_id, "tool_id": first.tool_id, "payload": first.payload}
+        self.state["last_result"] = result
+        self.state["last_assistant_response"] = result["summary"]
+        add_history_entry(self.state, "assistant", result["summary"], {"status": "needs_approval"})
+        feedback("approval_requested", {"request_id": request_id, "tool_id": first.tool_id, "query": query})
+        log_event("assistant_approval_needed", "pending", f"request_id={request_id} tool={first.tool_id}")
+        self._save()
+        return result
+
+    def _execute_steps(self, query: str, steps: list[PlanStep]) -> dict:
+        step_results: list[dict] = []
+        for index, step in enumerate(steps):
+            if self._requires_approval(step.tool_id, step.payload):
+                return self._store_pending(
+                    query,
+                    steps[index:],
+                    step.reason,
+                    completed_results=step_results,
+                )
+            log_event("assistant_tool_begin", "running", f"tool={step.tool_id}")
+            result = self.dispatcher.dispatch(step.tool_id, step.payload)
+            result["action"] = step.reason
+            step_results.append(result)
+            log_event("assistant_tool_ok", "ok", f"tool={step.tool_id}")
+        envelope = self.synthesizer.synthesize(query, step_results)
+        self.state["current_execution_status"] = "idle"
+        self.state["last_tool_result"] = step_results[-1] if step_results else {}
+        self.state["last_result"] = envelope
+        self.state["last_assistant_response"] = envelope["summary"]
+        self.state["last_plan"] = [asdict(step) for step in steps]
+        add_history_entry(self.state, "assistant", envelope["summary"], {"status": envelope["status"], "details": envelope["details"]})
+        self._save()
+        return envelope
+
+    def ask(self, query: str) -> dict:
+        query = query.strip()
+        if not query:
+            raise AssistantError("Query is empty")
+        self.state = ensure_state()
+        self.config = ensure_config()
+        self.state["last_user_request"] = query
+        self.state["last_run_at"] = now_iso()
+        self.state["current_execution_status"] = "planning"
+        add_history_entry(self.state, "user", query)
+        log_event("assistant_request_begin", "running", f"query={truncate(query, 120)}")
+        steps, summary = self.planner.build(query)
+        self.state["last_plan"] = [asdict(step) for step in steps]
+        try:
+            result = self._execute_steps(query, steps)
+            feedback("assistant_request_ok", {"query": query, "status": result["status"]})
+            log_event("assistant_request_ok", result["status"], f"query={truncate(query, 120)}")
+            return result
+        except Exception as exc:
+            result = default_result_envelope()
+            result["status"] = "failed"
+            result["summary"] = "I could not complete that request."
+            result["details"] = str(exc)
+            self.state["current_execution_status"] = "failed"
+            self.state["last_result"] = result
+            self.state["last_assistant_response"] = result["summary"]
+            add_history_entry(self.state, "assistant", result["summary"], {"status": "failed", "details": str(exc)})
+            self._save()
+            feedback("assistant_request_failed", {"query": query, "error": str(exc)})
+            log_event("assistant_request_failed", "failed", truncate(str(exc), 160))
+            return result
+
+    def approve(self, request_id: str) -> dict:
+        pending = self.state.get("pending_approval", {})
+        if not pending or pending.get("request_id") != request_id:
+            raise AssistantError("Pending approval request not found")
+        steps = [PlanStep(**step) for step in pending.get("remaining_plan", [])]
+        query = pending.get("query", "Approved action")
+        self.state["pending_approval"] = {}
+        self.state["current_execution_status"] = "running"
+        feedback("approval_allowed", {"request_id": request_id})
+        log_event("assistant_approval_allowed", "ok", f"request_id={request_id}")
+        return self._execute_steps(query, steps)
+
+    def deny(self, request_id: str) -> dict:
+        pending = self.state.get("pending_approval", {})
+        if not pending or pending.get("request_id") != request_id:
+            raise AssistantError("Pending approval request not found")
+        self.state["pending_approval"] = {}
+        self.state["current_execution_status"] = "idle"
+        result = default_result_envelope()
+        result["status"] = "failed"
+        result["summary"] = "Action was not approved."
+        result["details"] = "The pending action was cancelled."
+        self.state["last_result"] = result
+        self.state["last_assistant_response"] = result["summary"]
+        add_history_entry(self.state, "assistant", result["summary"], {"status": "failed"})
+        self._save()
+        feedback("approval_denied", {"request_id": request_id})
+        log_event("assistant_approval_denied", "denied", f"request_id={request_id}")
+        return result
+
+    def explain(self) -> dict:
+        return self.ask("Explain the current system state")
+
+    def summarize(self) -> dict:
+        return self.ask("Summarize the current system state")
+
+    def web_search(self, query: str) -> dict:
+        return self.ask(query)
+
+    def export_training_data(self) -> list[dict]:
+        items: list[dict] = []
+        for raw in ASSISTANT_FEEDBACK.read_text(encoding="utf-8").splitlines() if ASSISTANT_FEEDBACK.exists() else []:
+            try:
+                items.append(json.loads(raw))
+            except Exception:
+                continue
+        state = ensure_state()
+        exported = []
+        for entry in state.get("history", []):
+            exported.append(
+                {
+                    "timestamp": entry.get("timestamp"),
+                    "role": entry.get("role"),
+                    "text": entry.get("text"),
+                    "context_snapshot": context_snapshot(),
+                    "last_plan": state.get("last_plan", []),
+                    "last_result": state.get("last_result", {}),
+                    "feedback": items[-8:],
+                }
+            )
+        return exported
+
+
+def set_mode(mode: str) -> dict:
+    if mode not in {"off", "suggest", "auto"}:
+        raise AssistantError("Mode must be off, suggest, or auto")
+    ensure_ai_mode(mode)
+    config = ensure_config()
+    config["mode"] = mode
+    config["enabled"] = mode != "off"
+    save_json(ASSISTANT_CONFIG, config)
+    state = ensure_state()
+    state["mode"] = mode
+    save_json(ASSISTANT_STATE, state)
+    log_event("assistant_mode_changed", "ok", f"mode={mode}")
+    return {"mode": mode, "summary": f"Assistant mode set to {mode}."}
+
+
+def assistant_status() -> dict:
+    config = ensure_config()
+    state = ensure_state()
+    pending = state.get("pending_approval", {})
+    return {
+        "mode": config.get("mode", ensure_ai_mode()),
+        "interaction_mode": config.get("interaction_mode", "interactive"),
+        "network_access": config.get("network_access", "ask"),
+        "current_execution_status": state.get("current_execution_status", "idle"),
+        "last_user_request": state.get("last_user_request", ""),
+        "last_assistant_response": state.get("last_assistant_response", ""),
+        "pending_request_id": pending.get("request_id", ""),
+        "history_size": len(state.get("history", [])),
+    }
+
+
+def usage() -> str:
+    return "\n".join(
+        [
+            "Usage:",
+            '  velyx-assistant ask "<query>"',
+            "  velyx-assistant status",
+            "  velyx-assistant mode",
+            "  velyx-assistant set-mode off|suggest|auto",
+            '  velyx-assistant web-search "<query>"',
+            "  velyx-assistant explain",
+            "  velyx-assistant summarize",
+            "  velyx-assistant approve <request_id>",
+            "  velyx-assistant deny <request_id>",
+            "  velyx-assistant export-training-data",
+        ]
+    )
+
+
+def main(argv: list[str]) -> int:
+    ensure_config()
+    ensure_state()
+    if len(argv) < 2:
+        print(usage(), file=sys.stderr)
+        return 1
+
+    backend = AssistantBackend()
+    command = argv[1]
+    try:
+        if command == "status":
+            print_json(assistant_status())
+            return 0
+        if command == "mode":
+            print(ensure_config().get("mode", ensure_ai_mode()))
+            return 0
+        if command == "set-mode":
+            if len(argv) < 3:
+                raise AssistantError("Missing mode")
+            print_json(set_mode(argv[2]))
+            return 0
+        if command == "ask":
+            if len(argv) < 3:
+                raise AssistantError("Missing query")
+            print_json(backend.ask(" ".join(argv[2:])))
+            return 0
+        if command == "web-search":
+            if len(argv) < 3:
+                raise AssistantError("Missing query")
+            print_json(backend.web_search(" ".join(argv[2:])))
+            return 0
+        if command == "explain":
+            print_json(backend.explain())
+            return 0
+        if command == "summarize":
+            print_json(backend.summarize())
+            return 0
+        if command == "approve":
+            if len(argv) < 3:
+                raise AssistantError("Missing request id")
+            print_json(backend.approve(argv[2]))
+            return 0
+        if command == "deny":
+            if len(argv) < 3:
+                raise AssistantError("Missing request id")
+            print_json(backend.deny(argv[2]))
+            return 0
+        if command == "export-training-data":
+            for item in backend.export_training_data():
+                print(json.dumps(item, ensure_ascii=False))
+            return 0
+        if command == "config":
+            print_json(ensure_config())
+            return 0
+        print(usage(), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        log_event("assistant_cli_failed", "failed", truncate(str(exc), 200))
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

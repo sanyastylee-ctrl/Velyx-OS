@@ -175,6 +175,9 @@ fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-ai" ]]; then
   "${PREFIX}/bin/velyx-ai" status >/dev/null || true
 fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-assistant" ]]; then
+  "${PREFIX}/bin/velyx-assistant" status >/dev/null || true
+fi
 
 if health_check; then
   CURRENT_VERSION="$(read_installed_version)"

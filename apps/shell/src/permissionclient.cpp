@@ -314,6 +314,51 @@ QString PermissionClient::aiLastError() const
     return m_aiLastError;
 }
 
+QString PermissionClient::assistantMode() const
+{
+    return m_assistantMode;
+}
+
+QString PermissionClient::assistantExecutionStatus() const
+{
+    return m_assistantExecutionStatus;
+}
+
+QString PermissionClient::assistantLastRequest() const
+{
+    return m_assistantLastRequest;
+}
+
+QString PermissionClient::assistantLastResponse() const
+{
+    return m_assistantLastResponse;
+}
+
+bool PermissionClient::assistantPendingApproval() const
+{
+    return m_assistantPendingApproval;
+}
+
+QString PermissionClient::assistantPendingRequestId() const
+{
+    return m_assistantPendingRequestId;
+}
+
+QString PermissionClient::assistantPendingSummary() const
+{
+    return m_assistantPendingSummary;
+}
+
+QString PermissionClient::assistantPendingDetails() const
+{
+    return m_assistantPendingDetails;
+}
+
+QVariantList PermissionClient::assistantHistory() const
+{
+    return m_assistantHistory;
+}
+
 QString PermissionClient::activeSpaceId() const
 {
     return m_activeSpaceId;
@@ -363,6 +408,7 @@ void PermissionClient::refreshApps()
     refreshRules();
     refreshAgentState();
     refreshAiState();
+    refreshAssistantState();
 
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     if (!launcher.isValid()) {
@@ -685,6 +731,97 @@ void PermissionClient::refreshAiState()
 
     if (changed) {
         emit aiStateChanged();
+    }
+}
+
+void PermissionClient::refreshAssistantState()
+{
+    const QString configPath = QDir::home().filePath(".velyx/assistant_config.json");
+    const QString statePath = QDir::home().filePath(".velyx/assistant_state.json");
+
+    QString mode {"suggest"};
+    QString executionStatus {"idle"};
+    QString lastRequest;
+    QString lastResponse;
+    bool pendingApproval = false;
+    QString pendingRequestId;
+    QString pendingSummary;
+    QString pendingDetails;
+    QVariantList history;
+
+    QFile configFile(configPath);
+    if (configFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(configFile.readAll());
+        if (document.isObject()) {
+            mode = document.object().value("mode").toString(mode);
+        }
+    }
+
+    QFile stateFile(statePath);
+    if (stateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            executionStatus = object.value("current_execution_status").toString(executionStatus);
+            lastRequest = object.value("last_user_request").toString();
+            lastResponse = object.value("last_assistant_response").toString();
+
+            const QJsonObject pending = object.value("pending_approval").toObject();
+            if (!pending.isEmpty()) {
+                pendingApproval = true;
+                pendingRequestId = pending.value("request_id").toString();
+                pendingSummary = pending.value("summary").toString();
+                const QJsonObject step = pending.value("step").toObject();
+                pendingDetails = step.value("tool_id").toString();
+            }
+
+            const QJsonArray historyArray = object.value("history").toArray();
+            for (const QJsonValue &value : historyArray) {
+                history.push_back(value.toObject().toVariantMap());
+            }
+        }
+    }
+
+    bool changed = false;
+    if (m_assistantMode != mode) {
+        m_assistantMode = mode;
+        changed = true;
+    }
+    if (m_assistantExecutionStatus != executionStatus) {
+        m_assistantExecutionStatus = executionStatus;
+        changed = true;
+    }
+    if (m_assistantLastRequest != lastRequest) {
+        m_assistantLastRequest = lastRequest;
+        changed = true;
+    }
+    if (m_assistantLastResponse != lastResponse) {
+        m_assistantLastResponse = lastResponse;
+        changed = true;
+    }
+    if (m_assistantPendingApproval != pendingApproval) {
+        m_assistantPendingApproval = pendingApproval;
+        changed = true;
+    }
+    if (m_assistantPendingRequestId != pendingRequestId) {
+        m_assistantPendingRequestId = pendingRequestId;
+        changed = true;
+    }
+    if (m_assistantPendingSummary != pendingSummary) {
+        m_assistantPendingSummary = pendingSummary;
+        changed = true;
+    }
+    if (m_assistantPendingDetails != pendingDetails) {
+        m_assistantPendingDetails = pendingDetails;
+        changed = true;
+    }
+    if (m_assistantHistory != history) {
+        m_assistantHistory = history;
+        changed = true;
+    }
+
+    if (changed) {
+        emit assistantStateChanged();
     }
 }
 
@@ -1203,6 +1340,7 @@ void PermissionClient::runAgentCommand(const QString &command)
             updateStatusDetails("agent_command", "ok", trimmed, "refresh_runtime");
             refreshAgentState();
             refreshAiState();
+            refreshAssistantState();
             refreshRuntimeStatus();
             refreshSpaces();
             refreshIntents();
@@ -1215,6 +1353,7 @@ void PermissionClient::runAgentCommand(const QString &command)
         updateStatusDetails("agent_command", "failed", trimmed, "retry");
         refreshAgentState();
         refreshAiState();
+        refreshAssistantState();
         return;
     }
 
@@ -1393,6 +1532,131 @@ void PermissionClient::blockAiSuggestion()
 
     updateLaunchState("error", "AI suggestion block unavailable");
     updateStatusDetails("ai_block", "failed", "ai_unavailable", "retry");
+}
+
+void PermissionClient::askAssistant(const QString &query)
+{
+    const QString trimmed = query.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-assistant", {"ask", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(12000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAssistantState();
+        refreshAiState();
+        refreshAgentState();
+        refreshRuntimeStatus();
+        refreshSpaces();
+        refreshIntents();
+        refreshRules();
+        refreshApps();
+        refreshOpenApps();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Assistant request handled" : output);
+            updateStatusDetails("assistant_ask", "ok", trimmed, m_assistantPendingApproval ? "review_approval" : "review_result");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Assistant request failed" : errorOutput);
+        updateStatusDetails("assistant_ask", "failed", trimmed, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Assistant backend unavailable");
+    updateStatusDetails("assistant_ask", "failed", trimmed, "retry");
+}
+
+void PermissionClient::approveAssistant(const QString &requestId)
+{
+    const QString trimmed = requestId.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-assistant", {"approve", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(12000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAssistantState();
+        refreshAiState();
+        refreshAgentState();
+        refreshRuntimeStatus();
+        refreshSpaces();
+        refreshIntents();
+        refreshRules();
+        refreshApps();
+        refreshOpenApps();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Assistant approval applied" : output);
+            updateStatusDetails("assistant_approve", "ok", trimmed, "observe_result");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Assistant approval failed" : errorOutput);
+        updateStatusDetails("assistant_approve", "failed", trimmed, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Assistant approval unavailable");
+    updateStatusDetails("assistant_approve", "failed", trimmed, "retry");
+}
+
+void PermissionClient::denyAssistant(const QString &requestId)
+{
+    const QString trimmed = requestId.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-assistant", {"deny", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAssistantState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Assistant action denied" : output);
+            updateStatusDetails("assistant_deny", "ok", trimmed, "none");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Assistant deny failed" : errorOutput);
+        updateStatusDetails("assistant_deny", "failed", trimmed, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Assistant deny unavailable");
+    updateStatusDetails("assistant_deny", "failed", trimmed, "retry");
+}
+
+void PermissionClient::setAssistantMode(const QString &mode)
+{
+    const QString trimmed = mode.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-assistant", {"set-mode", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAssistantState();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? QString("Assistant mode switched to %1").arg(trimmed) : output);
+            updateStatusDetails("assistant_mode", "ok", trimmed, "observe_assistant");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? QString("Failed to switch assistant mode to %1").arg(trimmed) : errorOutput);
+        updateStatusDetails("assistant_mode", "failed", trimmed, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Assistant mode control unavailable");
+    updateStatusDetails("assistant_mode", "failed", trimmed, "retry");
 }
 
 void PermissionClient::launchSelectedApp()

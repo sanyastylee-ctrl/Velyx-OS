@@ -47,6 +47,7 @@ ApplicationWindow {
         permissionClient.refreshRules()
         permissionClient.refreshAgentState()
         permissionClient.refreshAiState()
+        permissionClient.refreshAssistantState()
         permissionClient.refreshOpenApps()
         permissionClient.refreshApps()
     }
@@ -134,6 +135,7 @@ ApplicationWindow {
             permissionClient.refreshRules()
             permissionClient.refreshAgentState()
             permissionClient.refreshAiState()
+            permissionClient.refreshAssistantState()
             permissionClient.refreshOpenApps()
             permissionClient.refreshSelectedAppRuntime()
             permissionClient.refreshApps()
@@ -303,6 +305,7 @@ ApplicationWindow {
                                 permissionClient.refreshRules()
                                 permissionClient.refreshAgentState()
                                 permissionClient.refreshAiState()
+                                permissionClient.refreshAssistantState()
                                 permissionClient.refreshOpenApps()
                                 permissionClient.refreshApps()
                             }
@@ -480,12 +483,12 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     spacing: Theme.space4
 
-                    AiSuggestionPanel {
+                    AssistantPanel {
                         Layout.fillWidth: true
                         permissionClient: permissionClient
                     }
 
-                    AgentPanel {
+                    AiSuggestionPanel {
                         Layout.fillWidth: true
                         permissionClient: permissionClient
                     }

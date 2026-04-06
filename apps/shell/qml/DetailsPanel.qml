@@ -146,6 +146,18 @@ Rectangle {
                 : "No AI summary yet"
         }
 
+        ListRow {
+            title: "Assistant"
+            subtitle: root.permissionClient.assistantMode + "  •  " + root.permissionClient.assistantExecutionStatus
+        }
+
+        ListRow {
+            title: "Assistant response"
+            subtitle: root.permissionClient.assistantLastResponse.length > 0
+                ? root.permissionClient.assistantLastResponse
+                : "No assistant response yet"
+        }
+
         Rectangle {
             Layout.fillWidth: true
             visible: !root.showAdvanced

@@ -15,6 +15,7 @@ qt_add_qml_module(velyx-shell
         qml/Main.qml
         qml/PermissionDialog.qml
         qml/StatusChip.qml
+        qml/AssistantPanel.qml
         qml/AiSuggestionPanel.qml
         qml/SpaceCard.qml
         qml/IntentCard.qml

@@ -188,6 +188,7 @@ if [[ "${MODE}" != "units-only" ]]; then
   install_helper_script "${ROOT_DIR}/scripts/velyx-rule" "velyx-rule"
   install_helper_script "${ROOT_DIR}/scripts/velyx-agent" "velyx-agent"
   install_helper_script "${ROOT_DIR}/scripts/velyx-ai" "velyx-ai"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-assistant" "velyx-assistant"
 
   cp -a "${ROOT_DIR}/app-manifests/." "${MANIFESTS_DIR}/"
   write_version_metadata
@@ -240,12 +241,14 @@ EOF
   install_script_binary "${ROOT_DIR}/scripts/velyx-rule" "velyx-rule"
   install_script_binary "${ROOT_DIR}/scripts/velyx-agent" "velyx-agent"
   install_script_binary "${ROOT_DIR}/scripts/velyx-ai" "velyx-ai"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-assistant" "velyx-assistant"
   if command -v python3 >/dev/null 2>&1; then
     "${BIN_DIR}/velyx-app" sync-system >/dev/null || true
     "${BIN_DIR}/velyx-space" seed-defaults >/dev/null || true
     "${BIN_DIR}/velyx-intent" seed-defaults >/dev/null || true
     "${BIN_DIR}/velyx-rule" seed-defaults >/dev/null || true
     "${BIN_DIR}/velyx-ai" status >/dev/null || true
+    "${BIN_DIR}/velyx-assistant" status >/dev/null || true
   fi
 fi
 
