@@ -465,6 +465,31 @@ QString PermissionClient::devApprovalLevel() const
     return m_devApprovalLevel;
 }
 
+QVariantList PermissionClient::devAffectedFiles() const
+{
+    return m_devAffectedFiles;
+}
+
+QString PermissionClient::devValidationStatus() const
+{
+    return m_devValidationStatus;
+}
+
+QString PermissionClient::devLastRequest() const
+{
+    return m_devLastRequest;
+}
+
+QString PermissionClient::devPlanSummary() const
+{
+    return m_devPlanSummary;
+}
+
+QVariantList PermissionClient::devHistory() const
+{
+    return m_devHistory;
+}
+
 bool PermissionClient::devVisualFeedbackActive() const
 {
     return m_devVisualFeedbackActive;
@@ -1081,6 +1106,7 @@ void PermissionClient::refreshAssistantState()
 void PermissionClient::refreshDevModeState()
 {
     const QString statePath = QDir::home().filePath(".velyx/dev_mode.json");
+    const QString historyPath = QDir::home().filePath(".velyx/dev_history.json");
 
     bool enabled = false;
     QString devAgentMode;
@@ -1090,6 +1116,11 @@ void PermissionClient::refreshDevModeState()
     QString devApplyStrategy;
     QString devScope;
     QString devApprovalLevel;
+    QVariantList devAffectedFiles;
+    QString devValidationStatus;
+    QString devLastRequest;
+    QString devPlanSummary;
+    QVariantList devHistory;
     bool visualFeedbackActive = false;
     bool autoRefine = false;
     QString lastScreenshotPath;
@@ -1111,6 +1142,19 @@ void PermissionClient::refreshDevModeState()
             devApplyStrategy = object.value("dev_agent_apply_strategy").toString();
             devScope = object.value("dev_agent_scope").toString();
             devApprovalLevel = object.value("dev_agent_approval_level").toString();
+            const QJsonArray affectedFiles = object.value("dev_agent_affected_files").toArray();
+            for (const QJsonValue &value : affectedFiles) {
+                devAffectedFiles.push_back(value.toVariant());
+            }
+            if (devAffectedFiles.isEmpty()) {
+                const QJsonArray lastChangeFiles = object.value("last_change_files").toArray();
+                for (const QJsonValue &value : lastChangeFiles) {
+                    devAffectedFiles.push_back(value.toVariant());
+                }
+            }
+            devValidationStatus = object.value("dev_agent_validation_status").toString();
+            devLastRequest = object.value("dev_agent_last_request").toString();
+            devPlanSummary = object.value("dev_agent_last_plan_summary").toString();
             visualFeedbackActive = object.value("visual_feedback_active").toBool(false);
             autoRefine = object.value("auto_refine").toBool(false);
             lastScreenshotPath = object.value("last_screenshot").toString();
@@ -1118,6 +1162,20 @@ void PermissionClient::refreshDevModeState()
             visualSummary = object.value("last_visual_summary").toString();
             visualRecommendation = object.value("last_visual_recommendation").toString();
             pendingRefinement = object.value("pending_refinement_request").toString();
+        }
+    }
+
+    QFile historyFile(historyPath);
+    if (historyFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(historyFile.readAll());
+        if (document.isObject()) {
+            const QJsonArray changes = document.object().value("changes").toArray();
+            for (qsizetype index = changes.size(); index-- > 0;) {
+                const QJsonValue value = changes.at(index);
+                if (value.isObject()) {
+                    devHistory.push_back(value.toObject().toVariantMap());
+                }
+            }
         }
     }
 
@@ -1152,6 +1210,26 @@ void PermissionClient::refreshDevModeState()
     }
     if (m_devApprovalLevel != devApprovalLevel) {
         m_devApprovalLevel = devApprovalLevel;
+        changed = true;
+    }
+    if (m_devAffectedFiles != devAffectedFiles) {
+        m_devAffectedFiles = devAffectedFiles;
+        changed = true;
+    }
+    if (m_devValidationStatus != devValidationStatus) {
+        m_devValidationStatus = devValidationStatus;
+        changed = true;
+    }
+    if (m_devLastRequest != devLastRequest) {
+        m_devLastRequest = devLastRequest;
+        changed = true;
+    }
+    if (m_devPlanSummary != devPlanSummary) {
+        m_devPlanSummary = devPlanSummary;
+        changed = true;
+    }
+    if (m_devHistory != devHistory) {
+        m_devHistory = devHistory;
         changed = true;
     }
     if (m_devVisualFeedbackActive != visualFeedbackActive) {
@@ -2485,6 +2563,28 @@ void PermissionClient::disableDevMode()
     updateStatusDetails("dev_mode_disable", "failed", "dev_mode", "retry");
 }
 
+void PermissionClient::setDevAgentMode(const QString &mode)
+{
+    QProcess process;
+    process.start("velyx-dev", {"set-mode", mode});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshDevModeState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Dev Mode updated" : output);
+            updateStatusDetails("dev_mode_set_mode", "ok", mode, "observe_shell");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Failed to update Dev Mode" : errorOutput);
+        updateStatusDetails("dev_mode_set_mode", "failed", mode, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Dev Mode control unavailable");
+    updateStatusDetails("dev_mode_set_mode", "failed", mode, "retry");
+}
+
 void PermissionClient::rollbackDevMode()
 {
     QProcess process;
@@ -2505,6 +2605,28 @@ void PermissionClient::rollbackDevMode()
 
     updateLaunchState("error", "Dev rollback unavailable");
     updateStatusDetails("dev_mode_rollback", "failed", "dev_overlay", "retry");
+}
+
+void PermissionClient::restoreDevChange(const QString &changeId)
+{
+    QProcess process;
+    process.start("velyx-dev", {"restore", changeId});
+    if (process.waitForStarted(400) && process.waitForFinished(20000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshDevModeState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Dev change restored" : output);
+            updateStatusDetails("dev_mode_restore_selected", "ok", changeId, "observe_shell");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Failed to restore selected dev change" : errorOutput);
+        updateStatusDetails("dev_mode_restore_selected", "failed", changeId, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Dev restore unavailable");
+    updateStatusDetails("dev_mode_restore_selected", "failed", changeId, "retry");
 }
 
 void PermissionClient::restartShellDev()

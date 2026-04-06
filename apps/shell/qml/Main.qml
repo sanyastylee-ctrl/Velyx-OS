@@ -277,8 +277,8 @@ ApplicationWindow {
                     StatusChip {
                         visible: permissionClient.devModeEnabled
                         compact: true
-                        label: "Dev"
-                        value: "Overlay active"
+                        label: "Dev Mode"
+                        value: "Active"
                         tone: "warning"
                     }
                 }

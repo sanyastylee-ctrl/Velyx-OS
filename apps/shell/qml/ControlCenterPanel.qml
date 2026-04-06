@@ -285,7 +285,7 @@ Rectangle {
                 color: Theme.shellSurface
                 border.width: 1
                 border.color: Theme.shellStroke
-                implicitHeight: 178
+                implicitHeight: 220
 
                 ColumnLayout {
                     anchors.fill: parent
@@ -306,6 +306,7 @@ Rectangle {
                         StatusChip { compact: true; label: "Mode"; value: root.permissionClient.devModeEnabled ? root.permissionClient.devAgentMode : "disabled"; tone: root.permissionClient.devModeEnabled ? "warning" : "neutral" }
                         StatusChip { compact: true; label: "Auto refine"; value: root.permissionClient.devAutoRefine ? "on" : "off"; tone: root.permissionClient.devAutoRefine ? "warning" : "neutral" }
                         StatusChip { compact: true; label: "Status"; value: root.permissionClient.devApplyStrategy.length > 0 ? root.permissionClient.devApplyStrategy : "idle"; tone: "accent" }
+                        StatusChip { compact: true; label: "History"; value: root.permissionClient.devHistory.length > 0 ? root.permissionClient.devHistory.length + " changes" : "empty"; tone: root.permissionClient.devHistory.length > 0 ? "accent" : "neutral" }
                     }
 
                     RowLayout {
@@ -315,6 +316,18 @@ Rectangle {
                         Button {
                             text: root.permissionClient.devModeEnabled ? "Disable Dev" : "Enable Dev"
                             onClicked: root.permissionClient.devModeEnabled ? root.permissionClient.disableDevMode() : root.permissionClient.enableDevMode()
+                        }
+
+                        Button {
+                            text: "UI Live"
+                            enabled: root.permissionClient.devModeEnabled
+                            onClicked: root.permissionClient.setDevAgentMode("ui_live_only")
+                        }
+
+                        Button {
+                            text: "Full Dev"
+                            enabled: root.permissionClient.devModeEnabled
+                            onClicked: root.permissionClient.setDevAgentMode("full_dev")
                         }
 
                         Button {

@@ -14,6 +14,31 @@ Rectangle {
     border.color: Theme.shellStroke
     implicitHeight: 520
 
+    function strategyMessage(strategy) {
+        if (strategy === "live_apply")
+            return "This is a live shell change. Velyx can preview it, apply it, reload the shell, then capture the result."
+        if (strategy === "staged_update")
+            return "This request needs a staged update. Velyx will not pretend that a backend/runtime change is safe to apply live."
+        if (strategy === "reboot_required")
+            return "This request reaches deeper runtime paths and needs a restart or reboot cycle."
+        if (strategy === "deny")
+            return "This request is outside the allowed Dev Mode scope."
+        return "Dev Agent is ready to classify the next system change."
+    }
+
+    function joinList(value) {
+        if (!value)
+            return ""
+        if (Array.isArray(value))
+            return value.join(", ")
+        if (typeof value === "string")
+            return value
+        var items = []
+        for (var i = 0; i < value.length; ++i)
+            items.push(value[i])
+        return items.join(", ")
+    }
+
     ColumnLayout {
         anchors.fill: parent
         anchors.margins: Theme.space4
@@ -22,9 +47,11 @@ Rectangle {
         SectionHeader {
             Layout.fillWidth: true
             title: "Assistant"
-            subtitle: root.permissionClient.assistantMode === "off"
-                ? "Assistant automation is off. You can still ask for summaries and safe actions."
-                : "Say what you want. Velyx plans the steps, asks when needed, and returns the result."
+            subtitle: root.permissionClient.devModeEnabled
+                ? "Dev Agent is available. Ask for visual changes, review the plan, then apply or roll back inside the shell."
+                : (root.permissionClient.assistantMode === "off"
+                    ? "Assistant automation is off. You can still ask for summaries and safe actions."
+                    : "Say what you want. Velyx plans the steps, asks when needed, and returns the result.")
         }
 
         Flow {
@@ -123,6 +150,16 @@ Rectangle {
                 text: "Add intent"
                 onClicked: root.permissionClient.askAssistant('Add a new intent "Focus Session"')
             }
+            Button {
+                visible: root.permissionClient.devModeEnabled
+                text: "Rollback Last"
+                onClicked: root.permissionClient.rollbackDevMode()
+            }
+            Button {
+                visible: root.permissionClient.devModeEnabled
+                text: "Restart Shell"
+                onClicked: root.permissionClient.restartShellDev()
+            }
         }
 
         Rectangle {
@@ -183,6 +220,61 @@ Rectangle {
 
         Rectangle {
             Layout.fillWidth: true
+            visible: root.permissionClient.devModeEnabled
+                && (root.permissionClient.devPlanSummary.length > 0
+                    || root.permissionClient.devChangeClass.length > 0
+                    || root.permissionClient.devApplyStrategy.length > 0)
+            radius: Theme.radiusMd
+            color: Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.08)
+            border.width: 1
+            border.color: Theme.shellStroke
+            implicitHeight: 132
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: Theme.space4
+                spacing: 6
+
+                Label {
+                    text: root.permissionClient.devApplyStrategy === "live_apply"
+                        ? "Live apply preview"
+                        : "Dev change plan"
+                    color: Theme.textPrimary
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.permissionClient.devPlanSummary.length > 0
+                        ? root.permissionClient.devPlanSummary
+                        : root.strategyMessage(root.permissionClient.devApplyStrategy)
+                    color: Theme.textSecondary
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 12
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    text: root.strategyMessage(root.permissionClient.devApplyStrategy)
+                    color: Theme.textMuted
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 11
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    visible: root.permissionClient.devAffectedFiles.length > 0
+                    text: "Affected files: " + root.joinList(root.permissionClient.devAffectedFiles)
+                    color: Theme.textMuted
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 11
+                }
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
             radius: Theme.radiusMd
             color: Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.08)
             border.width: 1
@@ -229,6 +321,15 @@ Rectangle {
                         + (root.permissionClient.devChangeClass.length > 0 ? root.permissionClient.devChangeClass : "unclassified")
                         + " / "
                         + (root.permissionClient.devApplyStrategy.length > 0 ? root.permissionClient.devApplyStrategy : "pending")
+                    color: Theme.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                }
+
+                Label {
+                    visible: root.permissionClient.devModeEnabled
+                        && root.permissionClient.devVisualRecommendation.length > 0
+                    text: "Next visual refine: " + root.permissionClient.devVisualRecommendation
                     color: Theme.textMuted
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap

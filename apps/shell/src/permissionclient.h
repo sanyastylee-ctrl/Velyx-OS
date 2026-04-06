@@ -85,6 +85,11 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString devApplyStrategy READ devApplyStrategy NOTIFY devModeStateChanged)
     Q_PROPERTY(QString devScope READ devScope NOTIFY devModeStateChanged)
     Q_PROPERTY(QString devApprovalLevel READ devApprovalLevel NOTIFY devModeStateChanged)
+    Q_PROPERTY(QVariantList devAffectedFiles READ devAffectedFiles NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devValidationStatus READ devValidationStatus NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devLastRequest READ devLastRequest NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devPlanSummary READ devPlanSummary NOTIFY devModeStateChanged)
+    Q_PROPERTY(QVariantList devHistory READ devHistory NOTIFY devModeStateChanged)
     Q_PROPERTY(bool devVisualFeedbackActive READ devVisualFeedbackActive NOTIFY devModeStateChanged)
     Q_PROPERTY(bool devAutoRefine READ devAutoRefine NOTIFY devModeStateChanged)
     Q_PROPERTY(QString devLastScreenshotPath READ devLastScreenshotPath NOTIFY devModeStateChanged)
@@ -174,7 +179,9 @@ public:
     Q_INVOKABLE void setAssistantMode(const QString &mode);
     Q_INVOKABLE void enableDevMode();
     Q_INVOKABLE void disableDevMode();
+    Q_INVOKABLE void setDevAgentMode(const QString &mode);
     Q_INVOKABLE void rollbackDevMode();
+    Q_INVOKABLE void restoreDevChange(const QString &changeId);
     Q_INVOKABLE void restartShellDev();
     Q_INVOKABLE void setDevAutoRefine(bool enabled);
     Q_INVOKABLE void applyNextDevRefinement();
@@ -254,6 +261,11 @@ public:
     QString devApplyStrategy() const;
     QString devScope() const;
     QString devApprovalLevel() const;
+    QVariantList devAffectedFiles() const;
+    QString devValidationStatus() const;
+    QString devLastRequest() const;
+    QString devPlanSummary() const;
+    QVariantList devHistory() const;
     bool devVisualFeedbackActive() const;
     bool devAutoRefine() const;
     QString devLastScreenshotPath() const;
@@ -403,6 +415,11 @@ private:
     QString m_devApplyStrategy;
     QString m_devScope;
     QString m_devApprovalLevel;
+    QVariantList m_devAffectedFiles;
+    QString m_devValidationStatus;
+    QString m_devLastRequest;
+    QString m_devPlanSummary;
+    QVariantList m_devHistory;
     bool m_devVisualFeedbackActive {false};
     bool m_devAutoRefine {false};
     QString m_devLastScreenshotPath;
