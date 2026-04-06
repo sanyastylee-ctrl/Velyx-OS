@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict[str, str]:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+DIAG_DIR = STATE_DIR / "diagnostics"
+LOG_FILE = STATE_DIR / "diagnostics.log"
+ROOT = Path(__file__).resolve().parent.parent
+FILES = [
+    "update_state.json",
+    "first_boot_state.json",
+    "assistant_state.json",
+    "ai_state.json",
+    "model_state.json",
+]
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+    return default
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with LOG_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def capture_status() -> dict[str, Any]:
+    status_tool = shutil.which("velyx-status")
+    version_tool = shutil.which("velyx-version")
+    local_status_tool = ROOT / "scripts" / "velyx-status"
+    local_version_tool = ROOT / "scripts" / "velyx-version"
+    bash_tool = shutil.which("bash")
+    status_output = ""
+    version_output = ""
+    if status_tool:
+        result = subprocess.run([status_tool], capture_output=True, text=True, timeout=10, check=False)
+        status_output = (result.stdout or result.stderr).strip()
+    elif bash_tool and local_status_tool.exists():
+        result = subprocess.run([bash_tool, str(local_status_tool)], capture_output=True, text=True, timeout=10, check=False)
+        status_output = (result.stdout or result.stderr).strip()
+    if version_tool:
+        result = subprocess.run([version_tool], capture_output=True, text=True, timeout=5, check=False)
+        version_output = (result.stdout or result.stderr).strip()
+    elif bash_tool and local_version_tool.exists():
+        result = subprocess.run([bash_tool, str(local_version_tool)], capture_output=True, text=True, timeout=5, check=False)
+        version_output = (result.stdout or result.stderr).strip()
+    payload = {
+        "captured_at": now_iso(),
+        "status_output": status_output,
+        "version_output": version_output,
+        "files": {},
+    }
+    for name in FILES:
+        path = STATE_DIR / name
+        payload["files"][name] = read_json(path, {"missing": True})
+    return payload
+
+
+def export() -> dict[str, Any]:
+    payload = capture_status()
+    DIAG_DIR.mkdir(parents=True, exist_ok=True)
+    path = DIAG_DIR / f"velyx-diagnostics-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    log_event("diagnostics_exported", "ok", f"path={path}")
+    return {"status": "ok", "summary": "Diagnostics exported.", "path": str(path), "captured_at": payload["captured_at"]}
+
+
+def status() -> dict[str, Any]:
+    payload = capture_status()
+    first_boot = payload["files"].get("first_boot_state.json", {})
+    update = payload["files"].get("update_state.json", {})
+    model = payload["files"].get("model_state.json", {})
+    return {
+        "status": "needs_attention" if update.get("recovery_needed") or first_boot.get("system_ready") is False else "ok",
+        "summary": "Velyx diagnostics collected.",
+        "runtime_health": first_boot.get("runtime_health", "unknown"),
+        "recovery_needed": bool(update.get("recovery_needed", False)),
+        "update_state": update.get("update_state", "unknown"),
+        "active_model": model.get("active_model", ""),
+        "backend_status": model.get("backend_status", "unknown"),
+    }
+
+
+def usage() -> int:
+    print("usage: velyx-diagnostics status | export", file=sys.stderr)
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return usage()
+    command = sys.argv[1]
+    try:
+        if command == "status":
+            print(json.dumps(status(), ensure_ascii=False, indent=2))
+        elif command == "export":
+            print(json.dumps(export(), ensure_ascii=False, indent=2))
+        else:
+            return usage()
+        return 0
+    except Exception as exc:
+        log_event("diagnostics_failed", "failed", str(exc))
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

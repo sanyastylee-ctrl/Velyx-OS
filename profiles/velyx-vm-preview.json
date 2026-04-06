@@ -1,0 +1,40 @@
+{
+  "profile_id": "velyx-vm-preview",
+  "display_name": "Velyx OS Preview VM",
+  "description": "Developer Preview profile for running Velyx Shell as the primary session inside a virtual machine.",
+  "base_substrate": "linux userspace",
+  "entrypoints": {
+    "installer": "velyx-installer",
+    "first_boot": "velyx-firstboot",
+    "shell": "velyx-shell",
+    "update": "velyx-update",
+    "recovery": "velyx-recovery"
+  },
+  "required_packages": [
+    "systemd",
+    "dbus-user-session",
+    "xorg",
+    "xprop",
+    "wmctrl",
+    "xdotool",
+    "python3",
+    "qt6"
+  ],
+  "session_profile": {
+    "autologin_preview": true,
+    "primary_session": "Velyx Shell",
+    "shell_autostart": true,
+    "first_boot_before_normal_use": true
+  },
+  "ai_profile": {
+    "default_backend": "stub",
+    "recommended_backend": "ollama-compatible",
+    "default_selection_mode": "auto_hardware"
+  },
+  "recommended_vm": {
+    "memory_gb": 8,
+    "vcpus": 4,
+    "disk_gb": 24,
+    "graphics": "virtio or vmware-compatible"
+  }
+}

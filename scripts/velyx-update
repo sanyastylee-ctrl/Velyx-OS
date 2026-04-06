@@ -339,6 +339,9 @@ perform_rollback() {
     if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-assistant" ]]; then
       "${PREFIX}/bin/velyx-assistant" status >/dev/null || true
     fi
+    if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-firstboot" ]]; then
+      "${PREFIX}/bin/velyx-firstboot" rerun-checks >/dev/null || true
+    fi
     if health_check; then
       CURRENT_VERSION="$(read_installed_version)"
       rm -rf "${ROLLBACK_PREFIX}.tmp"
@@ -459,6 +462,10 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-ai" \
   "${STAGING_PREFIX}/bin/velyx-model" \
   "${STAGING_PREFIX}/bin/velyx-assistant" \
+  "${STAGING_PREFIX}/bin/velyx-firstboot" \
+  "${STAGING_PREFIX}/bin/velyx-installer" \
+  "${STAGING_PREFIX}/bin/velyx-diagnostics" \
+  "${STAGING_PREFIX}/bin/velyx-vm-preview" \
   "${STAGING_PREFIX}/bin/velyx-shell" \
   "${STAGING_PREFIX}/libexec/velyx-user-session-bootstrap" \
   "${STAGING_PREFIX}/libexec/velyx-recovery-bootstrap" \
@@ -525,6 +532,9 @@ if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-model" ]]; t
 fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-assistant" ]]; then
   "${PREFIX}/bin/velyx-assistant" status >/dev/null || true
+fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-firstboot" ]]; then
+  "${PREFIX}/bin/velyx-firstboot" rerun-checks >/dev/null || true
 fi
 log_event "update_apply_ok" "ok" "candidate_version=${CANDIDATE_VERSION}"
 

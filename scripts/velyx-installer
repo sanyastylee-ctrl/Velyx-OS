@@ -1,0 +1,207 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict[str, str]:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV = load_env_file()
+ROOT = Path(__file__).resolve().parent.parent
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+INSTALLER_LOG = STATE_DIR / "installer.log"
+FIRSTBOOT_TOOL = shutil.which("velyx-firstboot") or str(ROOT / "scripts" / "velyx-firstboot")
+INSTALL_TOOL = ROOT / "scripts" / "velyx-install.sh"
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with INSTALLER_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def run_json(command: list[str]) -> dict[str, Any]:
+    result = subprocess.run(command, capture_output=True, text=True, timeout=30, check=False)
+    if result.returncode != 0:
+        raise RuntimeError((result.stderr or result.stdout).strip() or f"command failed: {' '.join(command)}")
+    return json.loads(result.stdout)
+
+
+def network_state() -> str:
+    try:
+        socket.create_connection(("1.1.1.1", 53), timeout=1.5).close()
+        return "available"
+    except OSError:
+        return "offline"
+
+
+def system_check() -> dict[str, Any]:
+    hardware = {}
+    model_recommendation = {}
+    model_tool = shutil.which("velyx-model") or str(ROOT / "scripts" / "velyx-model")
+    if model_tool:
+        try:
+            hardware = run_json([sys.executable, model_tool, "detect-hardware"] if model_tool.endswith("velyx-model") and not shutil.which("velyx-model") else [model_tool, "detect-hardware"])
+            model_recommendation = run_json([sys.executable, model_tool, "recommend"] if model_tool.endswith("velyx-model") and not shutil.which("velyx-model") else [model_tool, "recommend"])
+        except Exception:
+            pass
+    disk = shutil.disk_usage(str(Path.home()))
+    return {
+        "disk_free_gb": round(disk.free / 1024 / 1024 / 1024, 1),
+        "network_state": network_state(),
+        "hardware": hardware,
+        "model_recommendation": model_recommendation,
+    }
+
+
+def prompt(question: str, default: str, options: list[str]) -> str:
+    option_text = "/".join(options)
+    raw = input(f"{question} [{option_text}] (default: {default}): ").strip()
+    if not raw:
+        return default
+    lowered = raw.lower().replace(" ", "_")
+    for option in options:
+        if lowered == option.lower().replace(" ", "_"):
+            return option
+    return default
+
+
+def run_install_backend(action: str) -> dict[str, Any]:
+    if action == "repair":
+        tool = shutil.which("velyx-recovery")
+        if tool:
+            result = subprocess.run([tool], capture_output=True, text=True, timeout=120, check=False)
+            return {"ok": result.returncode == 0, "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
+        return {"ok": False, "stdout": "", "stderr": "velyx-recovery not available"}
+    result = subprocess.run(["bash", str(INSTALL_TOOL)], capture_output=True, text=True, timeout=240, check=False)
+    return {"ok": result.returncode == 0, "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
+
+
+def interactive_flow() -> dict[str, Any]:
+    checks = system_check()
+    print("Velyx OS Preview Installer")
+    print("==========================")
+    print("1. Install Velyx")
+    print("2. Repair Existing Install")
+    print("3. Try / Diagnostics")
+    choice = input("Choose 1, 2, or 3 [1]: ").strip() or "1"
+    action = {"1": "install", "2": "repair", "3": "diagnostics"}.get(choice, "install")
+    if action == "diagnostics":
+        return {"action": "diagnostics", "checks": checks}
+    install_mode = prompt("Install mode", "standard_preview", ["standard_preview", "dev_preview"])
+    ai_mode = prompt("AI mode", "off", ["off", "suggest", "auto"])
+    model_selection = prompt("Model selection", "auto_hardware", ["manual", "auto_hardware", "auto_task"])
+    backend = prompt("Model backend", "stub", ["stub", "ollama-compatible", "openai-compatible"])
+    default_space = prompt("Default space", "general", ["general", "development", "safe-web", "recovery"])
+    predictive_mode = prompt("Predictive features", "off", ["off", "suggest", "auto"])
+    return {
+        "action": action,
+        "install_mode": install_mode,
+        "ai_mode": ai_mode,
+        "model_selection": model_selection,
+        "backend": backend,
+        "default_space": default_space,
+        "predictive_mode": predictive_mode,
+        "checks": checks,
+    }
+
+
+def noninteractive_flow(args: list[str]) -> dict[str, Any]:
+    payload = {
+        "action": "install",
+        "install_mode": "standard_preview",
+        "ai_mode": "off",
+        "model_selection": "auto_hardware",
+        "backend": "stub",
+        "default_space": "general",
+        "predictive_mode": "off",
+        "checks": system_check(),
+    }
+    index = 0
+    while index < len(args):
+        item = args[index]
+        if item == "--action":
+            payload["action"] = args[index + 1]
+            index += 2
+        elif item == "--install-mode":
+            payload["install_mode"] = args[index + 1]
+            index += 2
+        elif item == "--ai-mode":
+            payload["ai_mode"] = args[index + 1]
+            index += 2
+        elif item == "--model-selection":
+            payload["model_selection"] = args[index + 1]
+            index += 2
+        elif item == "--backend":
+            payload["backend"] = args[index + 1]
+            index += 2
+        elif item == "--default-space":
+            payload["default_space"] = args[index + 1]
+            index += 2
+        elif item == "--predictive-mode":
+            payload["predictive_mode"] = args[index + 1]
+            index += 2
+        else:
+            raise RuntimeError(f"unknown argument: {item}")
+    return payload
+
+
+def main() -> int:
+    try:
+        payload = interactive_flow() if "--non-interactive" not in sys.argv else noninteractive_flow([arg for arg in sys.argv[1:] if arg != "--non-interactive"])
+        log_event("installer_begin", "started", f"action={payload['action']}")
+        if payload["action"] == "diagnostics":
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        prepare_cmd = [
+            sys.executable, str(FIRSTBOOT_TOOL), "prepare", "--force",
+            "--action", payload["action"],
+            "--install-mode", payload["install_mode"],
+            "--ai-mode", payload["ai_mode"],
+            "--model-selection", payload["model_selection"],
+            "--backend", payload["backend"],
+            "--default-space", payload["default_space"],
+            "--predictive-mode", payload["predictive_mode"],
+        ]
+        subprocess.run(prepare_cmd, capture_output=True, text=True, timeout=30, check=False)
+        result = run_install_backend(payload["action"])
+        status = "ok" if result["ok"] else "failed"
+        log_event("installer_complete", status, f"action={payload['action']}")
+        output = {
+            "status": status,
+            "summary": "Velyx Installer finished." if result["ok"] else "Velyx Installer failed.",
+            "installer": payload,
+            "backend_result": result,
+            "next_step": "Reboot into Velyx First Boot." if result["ok"] else "Open diagnostics or repair.",
+        }
+        print(json.dumps(output, ensure_ascii=False, indent=2))
+        return 0 if result["ok"] else 1
+    except Exception as exc:
+        log_event("installer_failed", "failed", str(exc))
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

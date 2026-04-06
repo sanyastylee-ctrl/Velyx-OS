@@ -48,6 +48,7 @@ ApplicationWindow {
         permissionClient.refreshAgentState()
         permissionClient.refreshAiState()
         permissionClient.refreshAssistantState()
+        permissionClient.refreshFirstBootState()
         permissionClient.refreshOpenApps()
         permissionClient.refreshApps()
     }
@@ -136,6 +137,7 @@ ApplicationWindow {
             permissionClient.refreshAgentState()
             permissionClient.refreshAiState()
             permissionClient.refreshAssistantState()
+            permissionClient.refreshFirstBootState()
             permissionClient.refreshOpenApps()
             permissionClient.refreshSelectedAppRuntime()
             permissionClient.refreshApps()
@@ -503,6 +505,11 @@ ApplicationWindow {
                         Layout.fillWidth: true
                         permissionClient: permissionClient
                     }
+
+                    DiagnosticsPanel {
+                        Layout.fillWidth: true
+                        permissionClient: permissionClient
+                    }
                 }
             }
 
@@ -545,5 +552,9 @@ ApplicationWindow {
                 }
             }
         }
+    }
+
+    FirstBootOverlay {
+        permissionClient: permissionClient
     }
 }

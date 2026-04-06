@@ -9,6 +9,7 @@ UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
 LOCAL_BIN_DIR="${HOME}/.local/bin"
 BIN_SOURCE_DIR="${VELYX_BIN_DIR:-${ROOT_DIR}/target/release}"
 MANIFESTS_DIR="${PREFIX}/share/app-manifests"
+PROFILES_DIR="${PREFIX}/share/profiles"
 LIBEXEC_DIR="${PREFIX}/libexec"
 BIN_DIR="${PREFIX}/bin"
 ENV_FILE="${CONFIG_DIR}/velyx.env"
@@ -107,7 +108,10 @@ write_version_metadata() {
   version="$(determine_build_version)"
   mkdir -p "${PREFIX}/share"
   cat > "${PREFIX}/share/version.txt" <<EOF
+product=Velyx OS Preview
+channel=preview
 version=${version}
+build_id=${version}
 installed_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 source_root=${ROOT_DIR}
 EOF
@@ -149,7 +153,7 @@ warn_optional_cmd wmctrl
 warn_optional_cmd xdotool
 warn_optional_cmd python3
 
-mkdir -p "${BIN_DIR}" "${LIBEXEC_DIR}" "${MANIFESTS_DIR}" "${STATE_DIR}" "${CONFIG_DIR}" "${UNIT_DIR}" "${LOCAL_BIN_DIR}"
+mkdir -p "${BIN_DIR}" "${LIBEXEC_DIR}" "${MANIFESTS_DIR}" "${PROFILES_DIR}" "${STATE_DIR}" "${CONFIG_DIR}" "${UNIT_DIR}" "${LOCAL_BIN_DIR}"
 
 if [[ "${MODE}" != "units-only" ]]; then
   install_binary "session-manager-service" "velyx-session-manager"
@@ -190,8 +194,15 @@ if [[ "${MODE}" != "units-only" ]]; then
   install_helper_script "${ROOT_DIR}/scripts/velyx-ai" "velyx-ai"
   install_helper_script "${ROOT_DIR}/scripts/velyx-model" "velyx-model"
   install_helper_script "${ROOT_DIR}/scripts/velyx-assistant" "velyx-assistant"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-firstboot" "velyx-firstboot"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-installer" "velyx-installer"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-diagnostics" "velyx-diagnostics"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-vm-preview" "velyx-vm-preview"
 
   cp -a "${ROOT_DIR}/app-manifests/." "${MANIFESTS_DIR}/"
+  if [[ -d "${ROOT_DIR}/profiles" ]]; then
+    cp -a "${ROOT_DIR}/profiles/." "${PROFILES_DIR}/"
+  fi
   write_version_metadata
   if [[ "${MODE}" == "full" ]]; then
     mkdir -p "${STATE_DIR}/updates/staged" "${STATE_DIR}/updates/failed" "${STATE_DIR}/apps"
@@ -244,6 +255,10 @@ EOF
   install_script_binary "${ROOT_DIR}/scripts/velyx-ai" "velyx-ai"
   install_script_binary "${ROOT_DIR}/scripts/velyx-model" "velyx-model"
   install_script_binary "${ROOT_DIR}/scripts/velyx-assistant" "velyx-assistant"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-firstboot" "velyx-firstboot"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-installer" "velyx-installer"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-diagnostics" "velyx-diagnostics"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-vm-preview" "velyx-vm-preview"
   if command -v python3 >/dev/null 2>&1; then
     "${BIN_DIR}/velyx-app" sync-system >/dev/null || true
     "${BIN_DIR}/velyx-space" seed-defaults >/dev/null || true
@@ -252,6 +267,8 @@ EOF
     "${BIN_DIR}/velyx-ai" status >/dev/null || true
     "${BIN_DIR}/velyx-model" status >/dev/null || true
     "${BIN_DIR}/velyx-assistant" status >/dev/null || true
+    "${BIN_DIR}/velyx-firstboot" prepare --force --action install --install-mode standard_preview --ai-mode off --model-selection auto_hardware --backend stub --default-space general --predictive-mode off >/dev/null || true
+    "${BIN_DIR}/velyx-diagnostics" status >/dev/null || true
   fi
 fi
 

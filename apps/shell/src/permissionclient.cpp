@@ -384,6 +384,56 @@ QVariantList PermissionClient::assistantHistory() const
     return m_assistantHistory;
 }
 
+bool PermissionClient::firstBootRequired() const
+{
+    return m_firstBootRequired;
+}
+
+QString PermissionClient::firstBootStep() const
+{
+    return m_firstBootStep;
+}
+
+QString PermissionClient::firstBootVersion() const
+{
+    return m_firstBootVersion;
+}
+
+QString PermissionClient::firstBootInstallMode() const
+{
+    return m_firstBootInstallMode;
+}
+
+QString PermissionClient::firstBootNetworkState() const
+{
+    return m_firstBootNetworkState;
+}
+
+bool PermissionClient::firstBootSystemReady() const
+{
+    return m_firstBootSystemReady;
+}
+
+QString PermissionClient::firstBootAiMode() const
+{
+    return m_firstBootAiMode;
+}
+
+QString PermissionClient::firstBootModelSelectionMode() const
+{
+    return m_firstBootModelSelectionMode;
+}
+
+QString PermissionClient::firstBootDefaultSpace() const
+{
+    return m_firstBootDefaultSpace;
+}
+
+QString PermissionClient::firstBootPredictiveMode() const
+{
+    return m_firstBootPredictiveMode;
+}
+
 QString PermissionClient::activeSpaceId() const
 {
     return m_activeSpaceId;
@@ -434,6 +484,7 @@ void PermissionClient::refreshApps()
     refreshAgentState();
     refreshAiState();
     refreshAssistantState();
+    refreshFirstBootState();
 
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     if (!launcher.isValid()) {
@@ -907,6 +958,90 @@ void PermissionClient::refreshAssistantState()
 
     if (changed) {
         emit assistantStateChanged();
+    }
+}
+
+void PermissionClient::refreshFirstBootState()
+{
+    QProcess tickProcess;
+    tickProcess.start("velyx-firstboot", {"status"});
+    if (tickProcess.waitForStarted(200)) {
+        tickProcess.waitForFinished(1200);
+    }
+
+    const QString statePath = QDir::home().filePath(".velyx/first_boot_state.json");
+    bool required = false;
+    QString step {"welcome"};
+    QString version;
+    QString installMode {"standard_preview"};
+    QString networkState {"unknown"};
+    bool systemReady = false;
+    QString aiMode {"off"};
+    QString modelSelectionMode {"auto_hardware"};
+    QString defaultSpace {"general"};
+    QString predictiveMode {"off"};
+
+    QFile stateFile(statePath);
+    if (stateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            required = object.value("first_boot_required").toBool(required);
+            step = object.value("current_step").toString(step);
+            version = object.value("version").toString(version);
+            installMode = object.value("install_mode").toString(installMode);
+            networkState = object.value("network_state").toString(networkState);
+            systemReady = object.value("system_ready").toBool(systemReady);
+            aiMode = object.value("ai_mode").toString(aiMode);
+            modelSelectionMode = object.value("model_selection_mode").toString(modelSelectionMode);
+            defaultSpace = object.value("default_space").toString(defaultSpace);
+            predictiveMode = object.value("predictive_mode").toString(predictiveMode);
+        }
+    }
+
+    bool changed = false;
+    if (m_firstBootRequired != required) {
+        m_firstBootRequired = required;
+        changed = true;
+    }
+    if (m_firstBootStep != step) {
+        m_firstBootStep = step;
+        changed = true;
+    }
+    if (m_firstBootVersion != version) {
+        m_firstBootVersion = version;
+        changed = true;
+    }
+    if (m_firstBootInstallMode != installMode) {
+        m_firstBootInstallMode = installMode;
+        changed = true;
+    }
+    if (m_firstBootNetworkState != networkState) {
+        m_firstBootNetworkState = networkState;
+        changed = true;
+    }
+    if (m_firstBootSystemReady != systemReady) {
+        m_firstBootSystemReady = systemReady;
+        changed = true;
+    }
+    if (m_firstBootAiMode != aiMode) {
+        m_firstBootAiMode = aiMode;
+        changed = true;
+    }
+    if (m_firstBootModelSelectionMode != modelSelectionMode) {
+        m_firstBootModelSelectionMode = modelSelectionMode;
+        changed = true;
+    }
+    if (m_firstBootDefaultSpace != defaultSpace) {
+        m_firstBootDefaultSpace = defaultSpace;
+        changed = true;
+    }
+    if (m_firstBootPredictiveMode != predictiveMode) {
+        m_firstBootPredictiveMode = predictiveMode;
+        changed = true;
+    }
+    if (changed) {
+        emit firstBootStateChanged();
     }
 }
 
@@ -1666,6 +1801,108 @@ void PermissionClient::detectModelHardware()
 
     updateLaunchState("error", "Model hardware detection unavailable");
     updateStatusDetails("model_detect_hardware", "failed", "detect", "retry");
+}
+
+void PermissionClient::setFirstBootAiMode(const QString &mode)
+{
+    QProcess process;
+    process.start("velyx-firstboot", {"set-ai-mode", mode.trimmed()});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        refreshFirstBootState();
+        refreshAiState();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "First Boot AI mode updated" : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails("first_boot_ai_mode", process.exitCode() == 0 ? "ok" : "failed", mode, "review");
+    }
+}
+
+void PermissionClient::setFirstBootStep(const QString &step)
+{
+    QProcess process;
+    process.start("velyx-firstboot", {"set-step", step.trimmed()});
+    if (process.waitForStarted(400) && process.waitForFinished(4000)) {
+        refreshFirstBootState();
+    }
+}
+
+void PermissionClient::setFirstBootModelSelectionMode(const QString &mode)
+{
+    QProcess process;
+    process.start("velyx-firstboot", {"set-model-selection", mode.trimmed()});
+    if (process.waitForStarted(400) && process.waitForFinished(6000)) {
+        refreshFirstBootState();
+        refreshAiState();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "First Boot model selection updated" : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails("first_boot_model_selection", process.exitCode() == 0 ? "ok" : "failed", mode, "review");
+    }
+}
+
+void PermissionClient::setFirstBootDefaultSpace(const QString &spaceId)
+{
+    QProcess process;
+    process.start("velyx-firstboot", {"set-default-space", spaceId.trimmed()});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        refreshFirstBootState();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "Default space updated" : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails("first_boot_default_space", process.exitCode() == 0 ? "ok" : "failed", spaceId, "review");
+    }
+}
+
+void PermissionClient::setFirstBootPredictiveMode(const QString &mode)
+{
+    QProcess process;
+    process.start("velyx-firstboot", {"set-predictive", mode.trimmed()});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        refreshFirstBootState();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "Predictive mode updated" : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails("first_boot_predictive", process.exitCode() == 0 ? "ok" : "failed", mode, "review");
+    }
+}
+
+void PermissionClient::rerunFirstBootChecks()
+{
+    QProcess process;
+    process.start("velyx-firstboot", {"rerun-checks"});
+    if (process.waitForStarted(400) && process.waitForFinished(6000)) {
+        refreshFirstBootState();
+        refreshRuntimeStatus();
+        refreshAiState();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "Velyx checks refreshed" : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails("first_boot_checks", process.exitCode() == 0 ? "ok" : "failed", "first_boot", "review");
+    }
+}
+
+void PermissionClient::completeFirstBoot()
+{
+    QProcess process;
+    process.start("velyx-firstboot", {"complete"});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        refreshFirstBootState();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "Welcome to Velyx." : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails("first_boot_complete", process.exitCode() == 0 ? "ok" : "failed", m_firstBootDefaultSpace, "continue_work");
+    }
+}
+
+void PermissionClient::runRecoveryFlow()
+{
+    QProcess process;
+    process.start("velyx-recovery");
+    if (process.waitForStarted(400) && process.waitForFinished(12000)) {
+        refreshRuntimeStatus();
+        refreshFirstBootState();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "Velyx Recovery completed" : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails("recovery", process.exitCode() == 0 ? "ok" : "failed", "recovery", "review");
+    }
+}
+
+void PermissionClient::exportDiagnostics()
+{
+    QProcess process;
+    process.start("velyx-diagnostics", {"export"});
+    if (process.waitForStarted(400) && process.waitForFinished(10000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", output.isEmpty() ? "Diagnostics export finished" : output);
+        updateStatusDetails("diagnostics_export", process.exitCode() == 0 ? "ok" : "failed", "diagnostics", "review");
+    }
 }
 
 void PermissionClient::askAssistant(const QString &query)

@@ -71,6 +71,16 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString assistantPendingSummary READ assistantPendingSummary NOTIFY assistantStateChanged)
     Q_PROPERTY(QString assistantPendingDetails READ assistantPendingDetails NOTIFY assistantStateChanged)
     Q_PROPERTY(QVariantList assistantHistory READ assistantHistory NOTIFY assistantStateChanged)
+    Q_PROPERTY(bool firstBootRequired READ firstBootRequired NOTIFY firstBootStateChanged)
+    Q_PROPERTY(QString firstBootStep READ firstBootStep NOTIFY firstBootStateChanged)
+    Q_PROPERTY(QString firstBootVersion READ firstBootVersion NOTIFY firstBootStateChanged)
+    Q_PROPERTY(QString firstBootInstallMode READ firstBootInstallMode NOTIFY firstBootStateChanged)
+    Q_PROPERTY(QString firstBootNetworkState READ firstBootNetworkState NOTIFY firstBootStateChanged)
+    Q_PROPERTY(bool firstBootSystemReady READ firstBootSystemReady NOTIFY firstBootStateChanged)
+    Q_PROPERTY(QString firstBootAiMode READ firstBootAiMode NOTIFY firstBootStateChanged)
+    Q_PROPERTY(QString firstBootModelSelectionMode READ firstBootModelSelectionMode NOTIFY firstBootStateChanged)
+    Q_PROPERTY(QString firstBootDefaultSpace READ firstBootDefaultSpace NOTIFY firstBootStateChanged)
+    Q_PROPERTY(QString firstBootPredictiveMode READ firstBootPredictiveMode NOTIFY firstBootStateChanged)
     Q_PROPERTY(QString activeSpaceId READ activeSpaceId NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceName READ activeSpaceName NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceState READ activeSpaceState NOTIFY spacesChanged)
@@ -88,6 +98,7 @@ public:
     Q_INVOKABLE void refreshAgentState();
     Q_INVOKABLE void refreshAiState();
     Q_INVOKABLE void refreshAssistantState();
+    Q_INVOKABLE void refreshFirstBootState();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
     Q_INVOKABLE void selectActiveApp(const QString &appId);
@@ -120,6 +131,15 @@ public:
     Q_INVOKABLE void blockAiSuggestion();
     Q_INVOKABLE void setModelSelectionMode(const QString &mode);
     Q_INVOKABLE void detectModelHardware();
+    Q_INVOKABLE void setFirstBootAiMode(const QString &mode);
+    Q_INVOKABLE void setFirstBootStep(const QString &step);
+    Q_INVOKABLE void setFirstBootModelSelectionMode(const QString &mode);
+    Q_INVOKABLE void setFirstBootDefaultSpace(const QString &spaceId);
+    Q_INVOKABLE void setFirstBootPredictiveMode(const QString &mode);
+    Q_INVOKABLE void rerunFirstBootChecks();
+    Q_INVOKABLE void completeFirstBoot();
+    Q_INVOKABLE void runRecoveryFlow();
+    Q_INVOKABLE void exportDiagnostics();
     Q_INVOKABLE void askAssistant(const QString &query);
     Q_INVOKABLE void approveAssistant(const QString &requestId);
     Q_INVOKABLE void denyAssistant(const QString &requestId);
@@ -187,6 +207,16 @@ public:
     QString assistantPendingSummary() const;
     QString assistantPendingDetails() const;
     QVariantList assistantHistory() const;
+    bool firstBootRequired() const;
+    QString firstBootStep() const;
+    QString firstBootVersion() const;
+    QString firstBootInstallMode() const;
+    QString firstBootNetworkState() const;
+    bool firstBootSystemReady() const;
+    QString firstBootAiMode() const;
+    QString firstBootModelSelectionMode() const;
+    QString firstBootDefaultSpace() const;
+    QString firstBootPredictiveMode() const;
     QString activeSpaceId() const;
     QString activeSpaceName() const;
     QString activeSpaceState() const;
@@ -215,6 +245,7 @@ signals:
     void agentStateChanged();
     void aiStateChanged();
     void assistantStateChanged();
+    void firstBootStateChanged();
 
 private:
     QVariantMap cachedAppInfo(const QString &appId) const;
@@ -304,6 +335,16 @@ private:
     QString m_assistantPendingSummary;
     QString m_assistantPendingDetails;
     QVariantList m_assistantHistory;
+    bool m_firstBootRequired {false};
+    QString m_firstBootStep {"welcome"};
+    QString m_firstBootVersion;
+    QString m_firstBootInstallMode {"standard_preview"};
+    QString m_firstBootNetworkState {"unknown"};
+    bool m_firstBootSystemReady {false};
+    QString m_firstBootAiMode {"off"};
+    QString m_firstBootModelSelectionMode {"auto_hardware"};
+    QString m_firstBootDefaultSpace {"general"};
+    QString m_firstBootPredictiveMode {"off"};
     QString m_activeSpaceId;
     QString m_activeSpaceName;
     QString m_activeSpaceState {"unknown"};

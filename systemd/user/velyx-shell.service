@@ -11,6 +11,7 @@ Type=simple
 EnvironmentFile=-%h/.config/velyx/velyx.env
 Environment=VELYX_USER_ID=%u
 Environment=HOME=%h
+ExecStartPre=/usr/lib/velyx/boot/velyx-firstboot-dispatch
 ExecStart=/usr/bin/velyx-shell
 Restart=always
 RestartSec=1

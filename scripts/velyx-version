@@ -14,7 +14,7 @@ STATE_FILE="${STATE_DIR}/update_state.json"
 
 read_version_file() {
   if [[ -f "${VERSION_FILE}" ]]; then
-    awk -F= '/^version=/{print $2; exit}' "${VERSION_FILE}"
+    cat "${VERSION_FILE}"
     return 0
   fi
   return 1
@@ -28,9 +28,14 @@ read_state_key() {
   grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "${STATE_FILE}" | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true
 }
 
-VERSION="$(read_version_file || true)"
+VERSION_FILE_CONTENT="$(read_version_file || true)"
 UPDATE_STATE="$(read_state_key update_state || true)"
 LAST_RESULT="$(read_state_key last_update_result || true)"
+
+VERSION="$(printf '%s\n' "${VERSION_FILE_CONTENT}" | awk -F= '/^version=/{print $2; exit}')"
+PRODUCT="$(printf '%s\n' "${VERSION_FILE_CONTENT}" | awk -F= '/^product=/{print $2; exit}')"
+CHANNEL="$(printf '%s\n' "${VERSION_FILE_CONTENT}" | awk -F= '/^channel=/{print $2; exit}')"
+BUILD_ID="$(printf '%s\n' "${VERSION_FILE_CONTENT}" | awk -F= '/^build_id=/{print $2; exit}')"
 
 if [[ -z "${VERSION}" ]]; then
   VERSION="$(read_state_key current_version || true)"
@@ -41,7 +46,16 @@ if [[ -z "${VERSION}" ]]; then
   exit 0
 fi
 
+if [[ -n "${PRODUCT}" ]]; then
+  printf 'product=%s\n' "${PRODUCT}"
+fi
+if [[ -n "${CHANNEL}" ]]; then
+  printf 'channel=%s\n' "${CHANNEL}"
+fi
 printf 'version=%s\n' "${VERSION}"
+if [[ -n "${BUILD_ID}" ]]; then
+  printf 'build_id=%s\n' "${BUILD_ID}"
+fi
 if [[ -n "${UPDATE_STATE}" ]]; then
   printf 'update_state=%s\n' "${UPDATE_STATE}"
 fi

@@ -17,6 +17,8 @@ qt_add_qml_module(velyx-shell
         qml/StatusChip.qml
         qml/AssistantPanel.qml
         qml/AiSuggestionPanel.qml
+        qml/FirstBootOverlay.qml
+        qml/DiagnosticsPanel.qml
         qml/SpaceCard.qml
         qml/IntentCard.qml
         qml/AgentPanel.qml
