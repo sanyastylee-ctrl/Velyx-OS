@@ -104,11 +104,139 @@ pub struct AppRegistryEntry {
     pub autostart: bool,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SpaceSource {
+    System,
+    User,
+}
+
+impl SpaceSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::User => "user",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SpaceStatus {
+    Active,
+    Inactive,
+    Broken,
+}
+
+impl SpaceStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Inactive => "inactive",
+            Self::Broken => "broken",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum SpaceRuntimeState {
+    Ready,
+    Degraded,
+    Failed,
+}
+
+impl SpaceRuntimeState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Degraded => "degraded",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SpaceRegistryEntry {
+    pub space_id: String,
+    pub display_name: String,
+    pub description: Option<String>,
+    pub apps: Vec<String>,
+    pub autostart_apps: Vec<String>,
+    pub required_apps: Vec<String>,
+    pub preferred_active_app: Option<String>,
+    pub security_mode: String,
+    pub permissions_profile: Option<String>,
+    pub focus_policy: String,
+    pub ui_layout: Option<String>,
+    pub status: SpaceStatus,
+    pub created_at: String,
+    pub updated_at: String,
+    pub source: SpaceSource,
+}
+
+impl SpaceRegistryEntry {
+    pub fn to_map(&self, runtime_state: &str, reason: &str, active: bool) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        map.insert("space_id".to_string(), self.space_id.clone());
+        map.insert("display_name".to_string(), self.display_name.clone());
+        map.insert(
+            "description".to_string(),
+            self.description.clone().unwrap_or_default(),
+        );
+        map.insert("apps".to_string(), self.apps.join(","));
+        map.insert("autostart_apps".to_string(), self.autostart_apps.join(","));
+        map.insert("required_apps".to_string(), self.required_apps.join(","));
+        map.insert(
+            "preferred_active_app".to_string(),
+            self.preferred_active_app.clone().unwrap_or_default(),
+        );
+        map.insert("security_mode".to_string(), self.security_mode.clone());
+        map.insert(
+            "permissions_profile".to_string(),
+            self.permissions_profile.clone().unwrap_or_default(),
+        );
+        map.insert("focus_policy".to_string(), self.focus_policy.clone());
+        map.insert("ui_layout".to_string(), self.ui_layout.clone().unwrap_or_default());
+        map.insert("status".to_string(), self.status.as_str().to_string());
+        map.insert("source".to_string(), self.source.as_str().to_string());
+        map.insert("created_at".to_string(), self.created_at.clone());
+        map.insert("updated_at".to_string(), self.updated_at.clone());
+        map.insert("runtime_state".to_string(), runtime_state.to_string());
+        map.insert("reason".to_string(), reason.to_string());
+        map.insert("active".to_string(), active.to_string());
+        map
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct SpaceRuntimeSnapshot {
+    pub space_id: String,
+    pub display_name: String,
+    pub source: String,
+    pub status: String,
+    pub runtime_state: String,
+    pub security_mode: String,
+    pub permissions_profile: Option<String>,
+    pub focus_policy: String,
+    pub preferred_active_app: Option<String>,
+    pub apps: Vec<String>,
+    pub autostart_apps: Vec<String>,
+    pub required_apps: Vec<String>,
+    pub active: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct SpacesRegistryFile {
+    pub active_space_id: Option<String>,
+    #[serde(default)]
+    pub spaces: Vec<SpaceRegistryEntry>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct AppRuntimeSnapshot {
     pub app_id: String,
     pub required: bool,
     pub autostart: bool,
+    pub in_active_space: bool,
     pub state: String,
     pub pid: Option<u32>,
     pub launched_at: Option<String>,
@@ -180,6 +308,13 @@ pub struct SessionSnapshot {
     pub required_services: Vec<ServiceHealth>,
     pub optional_services: Vec<ServiceHealth>,
     pub apps: Vec<AppRuntimeSnapshot>,
+    pub spaces: Vec<SpaceRuntimeSnapshot>,
+    pub active_space_id: Option<String>,
+    pub active_space_name: Option<String>,
+    pub active_space_state: Option<String>,
+    pub active_space_security_mode: Option<String>,
+    pub active_space_preferred_active_app: Option<String>,
+    pub active_space_apps: Vec<String>,
     pub startup_deadline_epoch_ms: Option<u64>,
     pub retry_count: u32,
 }
@@ -199,6 +334,13 @@ impl Default for SessionSnapshot {
             required_services: Vec::new(),
             optional_services: Vec::new(),
             apps: Vec::new(),
+            spaces: Vec::new(),
+            active_space_id: None,
+            active_space_name: None,
+            active_space_state: None,
+            active_space_security_mode: None,
+            active_space_preferred_active_app: None,
+            active_space_apps: Vec::new(),
             startup_deadline_epoch_ms: None,
             retry_count: 0,
         }

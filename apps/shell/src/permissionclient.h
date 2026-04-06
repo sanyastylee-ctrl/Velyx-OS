@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QHash>
 #include <QString>
+#include <QStringList>
 #include <QVariantList>
 #include <QVariantMap>
 
@@ -11,6 +12,7 @@ class PermissionClient : public QObject
     Q_OBJECT
     Q_PROPERTY(QVariantList apps READ apps NOTIFY appsChanged)
     Q_PROPERTY(QVariantList openApps READ openApps NOTIFY openAppsChanged)
+    Q_PROPERTY(QVariantList spaces READ spaces NOTIFY spacesChanged)
     Q_PROPERTY(QVariantMap selectedAppInfo READ selectedAppInfo NOTIFY selectedAppInfoChanged)
     Q_PROPERTY(QString selectedAppId READ selectedAppId NOTIFY selectedAppInfoChanged)
     Q_PROPERTY(QString activeAppId READ activeAppId NOTIFY activeAppChanged)
@@ -31,12 +33,18 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString sessionAvailability READ sessionAvailability NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString sessionState READ sessionState NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString sessionHealth READ sessionHealth NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString activeSpaceId READ activeSpaceId NOTIFY spacesChanged)
+    Q_PROPERTY(QString activeSpaceName READ activeSpaceName NOTIFY spacesChanged)
+    Q_PROPERTY(QString activeSpaceState READ activeSpaceState NOTIFY spacesChanged)
+    Q_PROPERTY(QString activeSpaceSecurityMode READ activeSpaceSecurityMode NOTIFY spacesChanged)
+    Q_PROPERTY(QString activeSpacePreferredApp READ activeSpacePreferredApp NOTIFY spacesChanged)
 
 public:
     explicit PermissionClient(QObject *parent = nullptr);
 
     Q_INVOKABLE void refreshApps();
     Q_INVOKABLE void refreshOpenApps();
+    Q_INVOKABLE void refreshSpaces();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
     Q_INVOKABLE void selectActiveApp(const QString &appId);
@@ -56,10 +64,12 @@ public:
     Q_INVOKABLE void closeActiveApp();
     Q_INVOKABLE void restartActiveInstance();
     Q_INVOKABLE void activateAppByIndex(int index);
+    Q_INVOKABLE void activateSpace(const QString &spaceId);
     void setInputControlMode(const QString &mode, const QString &details);
 
     QVariantList apps() const;
     QVariantList openApps() const;
+    QVariantList spaces() const;
     QVariantMap selectedAppInfo() const;
     QString selectedAppId() const;
     QString activeAppId() const;
@@ -80,6 +90,11 @@ public:
     QString sessionAvailability() const;
     QString sessionState() const;
     QString sessionHealth() const;
+    QString activeSpaceId() const;
+    QString activeSpaceName() const;
+    QString activeSpaceState() const;
+    QString activeSpaceSecurityMode() const;
+    QString activeSpacePreferredApp() const;
 
 signals:
     void permissionPromptRequired(
@@ -90,6 +105,7 @@ signals:
         const QString &explanation);
     void appsChanged();
     void openAppsChanged();
+    void spacesChanged();
     void selectedAppInfoChanged();
     void launchStatusChanged();
     void launchResultMessageChanged();
@@ -123,6 +139,7 @@ private:
 
     QVariantList m_apps;
     QVariantList m_openApps;
+    QVariantList m_spaces;
     QVariantMap m_sessionApps;
     QVariantMap m_selectedAppInfo;
     QString m_activeAppId;
@@ -147,4 +164,10 @@ private:
     QString m_sessionAvailability {"unknown"};
     QString m_sessionState {"unknown"};
     QString m_sessionHealth {"unknown"};
+    QString m_activeSpaceId;
+    QString m_activeSpaceName;
+    QString m_activeSpaceState {"unknown"};
+    QString m_activeSpaceSecurityMode;
+    QString m_activeSpacePreferredApp;
+    QStringList m_activeSpaceApps;
 };

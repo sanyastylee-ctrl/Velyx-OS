@@ -163,6 +163,9 @@ systemctl --user restart velyx-session-bootstrap.service >/dev/null 2>&1 || true
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-app" ]]; then
   "${PREFIX}/bin/velyx-app" sync-system >/dev/null || true
 fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-space" ]]; then
+  "${PREFIX}/bin/velyx-space" seed-defaults >/dev/null || true
+fi
 
 if health_check; then
   CURRENT_VERSION="$(read_installed_version)"

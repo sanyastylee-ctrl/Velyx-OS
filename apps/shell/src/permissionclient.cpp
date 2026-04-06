@@ -86,6 +86,11 @@ QVariantList PermissionClient::openApps() const
     return m_openApps;
 }
 
+QVariantList PermissionClient::spaces() const
+{
+    return m_spaces;
+}
+
 QVariantMap PermissionClient::selectedAppInfo() const
 {
     return m_selectedAppInfo;
@@ -186,6 +191,31 @@ QString PermissionClient::sessionHealth() const
     return m_sessionHealth;
 }
 
+QString PermissionClient::activeSpaceId() const
+{
+    return m_activeSpaceId;
+}
+
+QString PermissionClient::activeSpaceName() const
+{
+    return m_activeSpaceName;
+}
+
+QString PermissionClient::activeSpaceState() const
+{
+    return m_activeSpaceState;
+}
+
+QString PermissionClient::activeSpaceSecurityMode() const
+{
+    return m_activeSpaceSecurityMode;
+}
+
+QString PermissionClient::activeSpacePreferredApp() const
+{
+    return m_activeSpacePreferredApp;
+}
+
 QVariantMap PermissionClient::cachedAppInfo(const QString &appId) const
 {
     if (m_selectedAppInfo.value("app_id").toString() == appId) {
@@ -205,6 +235,7 @@ QVariantMap PermissionClient::cachedAppInfo(const QString &appId) const
 void PermissionClient::refreshApps()
 {
     refreshRuntimeStatus();
+    refreshSpaces();
 
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     if (!launcher.isValid()) {
@@ -233,6 +264,7 @@ void PermissionClient::refreshApps()
             map.insert("session_required", sessionApp.value("required"));
             map.insert("session_autostart", sessionApp.value("autostart"));
             map.insert("session_retry_count", sessionApp.value("retry_count"));
+            map.insert("in_active_space", sessionApp.value("in_active_space", false));
             map.insert("runtime_state", sessionApp.value("state", map.value("runtime_state")));
             map.insert("runtime_pid", sessionApp.value("pid", map.value("runtime_pid")));
         }
@@ -249,6 +281,40 @@ void PermissionClient::refreshApps()
 
     if (!m_apps.isEmpty() && m_selectedAppInfo.isEmpty()) {
         selectApp(m_apps.constFirst().toMap().value("app_id").toString());
+    }
+}
+
+void PermissionClient::refreshSpaces()
+{
+    QDBusInterface sessionManager(
+        kSessionManagerService,
+        kSessionManagerPath,
+        kSessionManagerInterface,
+        QDBusConnection::sessionBus());
+    if (!sessionManager.isValid()) {
+        if (!m_spaces.isEmpty()) {
+            m_spaces.clear();
+            emit spacesChanged();
+        }
+        return;
+    }
+
+    const QDBusMessage reply = sessionManager.call("ListSpaces");
+    if (reply.type() == QDBusMessage::ErrorMessage || reply.arguments().isEmpty()) {
+        return;
+    }
+
+    QVariantList spaces;
+    for (const QVariant &item : reply.arguments().constFirst().toList()) {
+        const QVariantMap map = item.toMap();
+        if (!map.isEmpty()) {
+            spaces.push_back(map);
+        }
+    }
+
+    if (m_spaces != spaces) {
+        m_spaces = spaces;
+        emit spacesChanged();
     }
 }
 
@@ -286,6 +352,7 @@ void PermissionClient::refreshOpenApps()
         runtime.insert("trust_level", info.value("trust_level"));
         runtime.insert("required", sessionApp.value("required", false));
         runtime.insert("autostart", sessionApp.value("autostart", false));
+        runtime.insert("in_active_space", sessionApp.value("in_active_space", false));
         runtime.insert("runtime_state", runtime.value("state"));
         runtime.insert("window_id", window.value("window_id"));
         runtime.insert("window_title", window.value("window_title", info.value("display_name", appId)));
@@ -382,12 +449,24 @@ void PermissionClient::refreshRuntimeStatus()
     QString sessionState = "unknown";
     QString sessionHealth = "unknown";
     QVariantMap sessionApps;
+    QString activeSpaceId;
+    QString activeSpaceName;
+    QString activeSpaceState;
+    QString activeSpaceSecurityMode;
+    QString activeSpacePreferredApp;
+    QStringList activeSpaceApps;
     if (sessionManager.isValid()) {
         QDBusReply<QVariantMap> reply = sessionManager.call("GetSessionState");
         if (reply.isValid()) {
             const QVariantMap payload = reply.value();
             sessionState = payload.value("state", "unknown").toString();
             sessionHealth = payload.value("health", "unknown").toString();
+            activeSpaceId = payload.value("active_space_id").toString();
+            activeSpaceName = payload.value("active_space_name").toString();
+            activeSpaceState = payload.value("active_space_state").toString();
+            activeSpaceSecurityMode = payload.value("active_space_security_mode").toString();
+            activeSpacePreferredApp = payload.value("active_space_preferred_active_app").toString();
+            activeSpaceApps = payload.value("active_space_apps").toString().split(',', Qt::SkipEmptyParts);
             const QString appsStatus = payload.value("apps_status").toString();
             for (const QString &entry : appsStatus.split('|', Qt::SkipEmptyParts)) {
                 const QStringList parts = entry.split(':');
@@ -400,6 +479,7 @@ void PermissionClient::refreshRuntimeStatus()
                 app.insert("required", parts.value(3));
                 app.insert("autostart", parts.value(4));
                 app.insert("retry_count", parts.value(5));
+                app.insert("in_active_space", activeSpaceApps.contains(parts.value(0)));
                 sessionApps.insert(parts.value(0), app);
             }
         } else {
@@ -420,9 +500,34 @@ void PermissionClient::refreshRuntimeStatus()
         m_sessionApps = sessionApps;
         changed = true;
     }
+    if (m_activeSpaceId != activeSpaceId) {
+        m_activeSpaceId = activeSpaceId;
+        changed = true;
+    }
+    if (m_activeSpaceName != activeSpaceName) {
+        m_activeSpaceName = activeSpaceName;
+        changed = true;
+    }
+    if (m_activeSpaceState != activeSpaceState) {
+        m_activeSpaceState = activeSpaceState;
+        changed = true;
+    }
+    if (m_activeSpaceSecurityMode != activeSpaceSecurityMode) {
+        m_activeSpaceSecurityMode = activeSpaceSecurityMode;
+        changed = true;
+    }
+    if (m_activeSpacePreferredApp != activeSpacePreferredApp) {
+        m_activeSpacePreferredApp = activeSpacePreferredApp;
+        changed = true;
+    }
+    if (m_activeSpaceApps != activeSpaceApps) {
+        m_activeSpaceApps = activeSpaceApps;
+        changed = true;
+    }
 
     if (changed) {
         emit runtimeStatusChanged();
+        emit spacesChanged();
     }
 }
 
@@ -519,6 +624,7 @@ void PermissionClient::refreshSelectedAppRuntime()
         updated.insert("session_required", sessionApp.value("required"));
         updated.insert("session_autostart", sessionApp.value("autostart"));
         updated.insert("session_retry_count", sessionApp.value("retry_count"));
+        updated.insert("in_active_space", sessionApp.value("in_active_space", false));
     }
     updated.insert("runtime_state", runtime.value("state"));
     updated.insert("runtime_pid", runtime.value("pid"));
@@ -538,6 +644,65 @@ void PermissionClient::refreshSelectedAppRuntime()
         emit selectedAppInfoChanged();
     }
     refreshOpenApps();
+}
+
+void PermissionClient::activateSpace(const QString &spaceId)
+{
+    if (spaceId.isEmpty()) {
+        return;
+    }
+
+    QDBusInterface sessionManager(
+        kSessionManagerService,
+        kSessionManagerPath,
+        kSessionManagerInterface,
+        QDBusConnection::sessionBus());
+    if (!sessionManager.isValid()) {
+        updateLaunchState("error", "session-manager недоступен");
+        updateStatusDetails("space_activate", "error", "session_manager_unavailable", "retry");
+        refreshRuntimeStatus();
+        return;
+    }
+
+    QDBusReply<QVariantMap> reply = sessionManager.call("ActivateSpace", spaceId);
+    if (!reply.isValid()) {
+        updateLaunchState("error", QString("Не удалось активировать space %1").arg(spaceId));
+        updateStatusDetails("space_activate", "error", "space_activate_failed", "retry");
+        return;
+    }
+
+    const QVariantMap payload = reply.value();
+    updateStatusDetails(
+        "space_activate",
+        payload.value("active", "false").toString() == "true" ? "ok" : "pending",
+        payload.value("runtime_state").toString(),
+        "refresh_space");
+    updateLaunchState(
+        "ok",
+        QString("Активирован space %1").arg(payload.value("display_name", spaceId).toString()));
+    refreshRuntimeStatus();
+    refreshSpaces();
+    refreshApps();
+    refreshOpenApps();
+
+    const QString preferredApp = payload.value("preferred_active_app").toString();
+    if (!preferredApp.isEmpty()) {
+        for (const QVariant &entry : std::as_const(m_openApps)) {
+            const QVariantMap app = entry.toMap();
+            if (app.value("app_id").toString() == preferredApp) {
+                selectActiveApp(preferredApp);
+                return;
+            }
+        }
+    }
+
+    for (const QVariant &entry : std::as_const(m_openApps)) {
+        const QVariantMap app = entry.toMap();
+        if (app.value("in_active_space").toBool() && app.value("state").toString() == "running") {
+            selectActiveApp(app.value("app_id").toString());
+            return;
+        }
+    }
 }
 
 void PermissionClient::launchSelectedApp()

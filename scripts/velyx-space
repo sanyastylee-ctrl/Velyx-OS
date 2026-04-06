@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV_FILE_VALUES = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV_FILE_VALUES.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+SPACES_REGISTRY = Path(
+    os.environ.get("VELYX_SPACES_REGISTRY")
+    or ENV_FILE_VALUES.get("VELYX_SPACES_REGISTRY")
+    or (STATE_DIR / "spaces_registry.json")
+)
+SPACES_LOG = STATE_DIR / "spaces.log"
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with SPACES_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def default_registry() -> dict:
+    timestamp = now_iso()
+    return {
+        "active_space_id": "general",
+        "spaces": [
+            {
+                "space_id": "general",
+                "display_name": "General",
+                "description": "Общий рабочий контекст",
+                "apps": ["com.velyx.browser", "com.velyx.files"],
+                "autostart_apps": ["com.velyx.browser"],
+                "required_apps": [],
+                "preferred_active_app": "com.velyx.browser",
+                "security_mode": "normal",
+                "permissions_profile": "default",
+                "focus_policy": "prefer_active_app",
+                "ui_layout": "standard",
+                "status": "active",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "source": "system",
+            },
+            {
+                "space_id": "development",
+                "display_name": "Development",
+                "description": "Контекст разработки и проверки",
+                "apps": ["com.velyx.browser", "com.velyx.files", "com.velyx.testapp"],
+                "autostart_apps": ["com.velyx.files"],
+                "required_apps": [],
+                "preferred_active_app": "com.velyx.files",
+                "security_mode": "relaxed",
+                "permissions_profile": "developer",
+                "focus_policy": "prefer_active_app",
+                "ui_layout": "development",
+                "status": "inactive",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "source": "system",
+            },
+            {
+                "space_id": "safe-web",
+                "display_name": "Safe Web",
+                "description": "Ограниченный браузерный контекст",
+                "apps": ["com.velyx.browser"],
+                "autostart_apps": ["com.velyx.browser"],
+                "required_apps": ["com.velyx.browser"],
+                "preferred_active_app": "com.velyx.browser",
+                "security_mode": "strict",
+                "permissions_profile": "safe_web",
+                "focus_policy": "prefer_active_app",
+                "ui_layout": "focused",
+                "status": "inactive",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "source": "system",
+            },
+            {
+                "space_id": "recovery",
+                "display_name": "Recovery",
+                "description": "Диагностический и recovery context",
+                "apps": ["com.velyx.files"],
+                "autostart_apps": ["com.velyx.files"],
+                "required_apps": [],
+                "preferred_active_app": "com.velyx.files",
+                "security_mode": "diagnostic",
+                "permissions_profile": "recovery",
+                "focus_policy": "prefer_active_app",
+                "ui_layout": "diagnostic",
+                "status": "inactive",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "source": "system",
+            },
+        ],
+    }
+
+
+def save_registry(registry: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = SPACES_REGISTRY.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(SPACES_REGISTRY)
+
+
+def ensure_registry_seeded(force: bool = False) -> dict:
+    if SPACES_REGISTRY.exists() and not force:
+        try:
+            registry = json.loads(SPACES_REGISTRY.read_text(encoding="utf-8"))
+            if registry.get("spaces"):
+                return registry
+        except Exception:
+            pass
+    registry = default_registry()
+    save_registry(registry)
+    log_event("space_registry_seeded", "ok", f"count={len(registry['spaces'])}")
+    return registry
+
+
+def load_registry() -> dict:
+    return ensure_registry_seeded(force=False)
+
+
+def find_space(registry: dict, space_id: str):
+    for space in registry.get("spaces", []):
+        if space.get("space_id") == space_id:
+            return space
+    return None
+
+
+def try_busctl(*args: str) -> subprocess.CompletedProcess:
+    if shutil.which("busctl") is None:
+        raise RuntimeError("busctl_unavailable")
+    return subprocess.run(["busctl", "--user", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def call_session_manager(space_id: str) -> bool:
+    try:
+        result = try_busctl(
+            "call",
+            "com.velyx.SessionManager",
+            "/com/velyx/SessionManager",
+            "com.velyx.SessionManager1",
+            "ActivateSpace",
+            "s",
+            space_id,
+        )
+        return result.returncode == 0
+    except RuntimeError:
+        return False
+
+
+def cmd_list() -> int:
+    registry = load_registry()
+    active_id = registry.get("active_space_id", "general")
+    for space in registry.get("spaces", []):
+        active = "*" if space.get("space_id") == active_id else "-"
+        print(
+            f"{active}\t{space.get('space_id')}\t{space.get('source', 'user')}\t"
+            f"{space.get('security_mode', '-')}\t{space.get('display_name', '')}"
+        )
+    return 0
+
+
+def cmd_info(space_id: str) -> int:
+    registry = load_registry()
+    space = find_space(registry, space_id)
+    if not space:
+        print(f"space not found: {space_id}", file=sys.stderr)
+        return 1
+    print(json.dumps(space, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_current() -> int:
+    registry = load_registry()
+    active_id = registry.get("active_space_id", "general")
+    space = find_space(registry, active_id)
+    if not space:
+        print("active space not found", file=sys.stderr)
+        return 1
+    print(json.dumps(space, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_activate(space_id: str) -> int:
+    registry = load_registry()
+    space = find_space(registry, space_id)
+    if not space:
+        log_event("space_activate_failed", "failed", f"space_id={space_id} reason=not_found")
+        print(f"space not found: {space_id}", file=sys.stderr)
+        return 1
+
+    log_event("space_activate_begin", "started", f"space_id={space_id}")
+    for entry in registry.get("spaces", []):
+        entry["status"] = "active" if entry.get("space_id") == space_id else "inactive"
+        if entry.get("space_id") == space_id:
+            entry["updated_at"] = now_iso()
+    registry["active_space_id"] = space_id
+    save_registry(registry)
+
+    activated_via_dbus = call_session_manager(space_id)
+    if activated_via_dbus:
+        log_event("space_activate_ok", "ok", f"space_id={space_id} path=dbus")
+    else:
+        log_event("space_activate_ok", "ok", f"space_id={space_id} path=registry_only")
+
+    print(f"active space: {space_id}")
+    return 0
+
+
+def usage() -> int:
+    print(
+        "usage: velyx-space list | info <space_id> | current | activate <space_id> | seed-defaults",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return usage()
+
+    command = sys.argv[1]
+    if command == "list":
+        return cmd_list()
+    if command == "info" and len(sys.argv) == 3:
+        return cmd_info(sys.argv[2])
+    if command == "current":
+        return cmd_current()
+    if command == "activate" and len(sys.argv) == 3:
+        return cmd_activate(sys.argv[2])
+    if command == "seed-defaults":
+        ensure_registry_seeded(force=False)
+        print(f"spaces registry ready: {SPACES_REGISTRY}")
+        return 0
+    return usage()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

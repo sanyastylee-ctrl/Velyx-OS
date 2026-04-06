@@ -1,4 +1,4 @@
-use crate::model::{AppRuntimeSnapshot, ServiceHealth, SessionSnapshot, SessionState, ShellRuntime};
+use crate::model::{AppRuntimeSnapshot, ServiceHealth, SessionSnapshot, SessionState, ShellRuntime, SpaceRuntimeSnapshot};
 use chrono::Utc;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -53,6 +53,26 @@ impl SessionStateStore {
         self.persist()
     }
 
+    pub fn set_space_snapshots(
+        &mut self,
+        spaces: Vec<SpaceRuntimeSnapshot>,
+        active_space_id: Option<String>,
+        active_space_name: Option<String>,
+        active_space_state: Option<String>,
+        active_space_security_mode: Option<String>,
+        active_space_preferred_active_app: Option<String>,
+        active_space_apps: Vec<String>,
+    ) -> Result<(), String> {
+        self.snapshot.spaces = spaces;
+        self.snapshot.active_space_id = active_space_id;
+        self.snapshot.active_space_name = active_space_name;
+        self.snapshot.active_space_state = active_space_state;
+        self.snapshot.active_space_security_mode = active_space_security_mode;
+        self.snapshot.active_space_preferred_active_app = active_space_preferred_active_app;
+        self.snapshot.active_space_apps = active_space_apps;
+        self.persist()
+    }
+
     pub fn set_shell_runtime(&mut self, shell: ShellRuntime) -> Result<(), String> {
         self.snapshot.shell = shell;
         self.persist()
@@ -87,6 +107,13 @@ impl SessionStateStore {
         self.snapshot.required_services.clear();
         self.snapshot.optional_services.clear();
         self.snapshot.apps.clear();
+        self.snapshot.spaces.clear();
+        self.snapshot.active_space_id = None;
+        self.snapshot.active_space_name = None;
+        self.snapshot.active_space_state = None;
+        self.snapshot.active_space_security_mode = None;
+        self.snapshot.active_space_preferred_active_app = None;
+        self.snapshot.active_space_apps.clear();
         self.persist()
     }
 

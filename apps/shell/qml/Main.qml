@@ -15,6 +15,7 @@ ApplicationWindow {
 
     Component.onCompleted: {
         permissionClient.refreshRuntimeStatus()
+        permissionClient.refreshSpaces()
         permissionClient.refreshOpenApps()
         permissionClient.refreshApps()
     }
@@ -97,6 +98,7 @@ ApplicationWindow {
         repeat: true
         onTriggered: {
             permissionClient.refreshRuntimeStatus()
+            permissionClient.refreshSpaces()
             permissionClient.refreshOpenApps()
             permissionClient.refreshSelectedAppRuntime()
             permissionClient.refreshApps()
@@ -200,7 +202,7 @@ ApplicationWindow {
         anchors.leftMargin: 72
         anchors.right: parent.right
         anchors.rightMargin: 72
-        height: 88
+        height: 96
 
         RowLayout {
             anchors.fill: parent
@@ -234,6 +236,30 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 title: "Session health"
                 subtitle: permissionClient.sessionHealth
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Active space"
+                subtitle: permissionClient.activeSpaceName.length > 0
+                    ? permissionClient.activeSpaceName + " (" + permissionClient.activeSpaceId + ")"
+                    : "Нет активного space"
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Space state"
+                subtitle: permissionClient.activeSpaceState.length > 0
+                    ? permissionClient.activeSpaceState
+                    : "unknown"
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Security mode"
+                subtitle: permissionClient.activeSpaceSecurityMode.length > 0
+                    ? permissionClient.activeSpaceSecurityMode
+                    : "-"
             }
 
             ListRow {
@@ -286,11 +312,11 @@ ApplicationWindow {
 
     Card {
         anchors.top: parent.top
-        anchors.topMargin: 292
+        anchors.topMargin: 300
         anchors.left: parent.left
         anchors.leftMargin: 72
         width: 360
-        height: 340
+        height: 332
 
         ColumnLayout {
             anchors.fill: parent
@@ -366,6 +392,16 @@ ApplicationWindow {
                             color: Theme.textMuted
                             font.pixelSize: 11
                         }
+
+                        Label {
+                            text: parent.parent.modelData.in_active_space === true
+                                ? "in active space"
+                                : "outside active space"
+                            color: parent.parent.modelData.in_active_space === true
+                                ? Theme.accentStrong
+                                : Theme.textMuted
+                            font.pixelSize: 11
+                        }
                     }
                 }
             }
@@ -374,11 +410,11 @@ ApplicationWindow {
 
     Card {
         anchors.top: parent.top
-        anchors.topMargin: 292
+        anchors.topMargin: 300
         anchors.left: parent.left
         anchors.leftMargin: 468
         width: 380
-        height: 340
+        height: 332
 
         ColumnLayout {
             anchors.fill: parent
@@ -408,6 +444,10 @@ ApplicationWindow {
             ListRow {
                 title: "Autostart"
                 subtitle: permissionClient.selectedAppInfo.session_autostart ? permissionClient.selectedAppInfo.session_autostart : "false"
+            }
+            ListRow {
+                title: "In active space"
+                subtitle: permissionClient.selectedAppInfo.in_active_space ? permissionClient.selectedAppInfo.in_active_space : "false"
             }
             ListRow {
                 title: "Required permissions"
@@ -517,11 +557,11 @@ ApplicationWindow {
 
     Card {
         anchors.top: parent.top
-        anchors.topMargin: 292
+        anchors.topMargin: 300
         anchors.right: parent.right
         anchors.rightMargin: 72
         width: 420
-        height: 340
+        height: 332
 
         ColumnLayout {
             anchors.fill: parent
@@ -598,82 +638,166 @@ ApplicationWindow {
         anchors.rightMargin: 72
         anchors.bottom: parent.bottom
         anchors.bottomMargin: 48
-        height: 180
+        height: 250
 
-        ColumnLayout {
+        RowLayout {
             anchors.fill: parent
             spacing: Theme.space3
 
-            SectionHeader {
-                title: "Open Apps"
-                subtitle: "Минимальный window host layer"
-            }
-
-            ListView {
-                Layout.fillWidth: true
+            Card {
+                Layout.preferredWidth: 380
                 Layout.fillHeight: true
-                clip: true
-                spacing: Theme.space3
-                model: permissionClient.openApps
+                fillColor: Theme.surface2
 
-                delegate: Rectangle {
-                    required property var modelData
-                    width: ListView.view.width
-                    height: 62
-                    radius: 16
-                    color: modelData.active ? Theme.surface3 : Theme.surface2
-                    border.width: 1
-                    border.color: modelData.active ? Theme.accentStrong : Theme.strokeSubtle
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: Theme.space3
 
-                    RowLayout {
-                        anchors.fill: parent
-                        anchors.margins: 14
-                        spacing: Theme.space3
-
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 4
-
-                            Label {
-                                text: modelData.display_name ? modelData.display_name : modelData.app_id
-                                color: Theme.textPrimary
-                                font.pixelSize: 15
-                                font.weight: Font.DemiBold
-                            }
-
-                            Label {
-                                text: modelData.app_id + " | state=" + modelData.state
-                                    + (modelData.pid ? " | pid=" + modelData.pid : "")
-                                color: Theme.textSecondary
-                                font.pixelSize: 12
-                            }
-
-                            Label {
-                                text: (modelData.window_title ? modelData.window_title : "окно не найдено")
-                                    + " | "
-                                    + (modelData.window_state ? modelData.window_state : "no_window")
-                                    + (modelData.window_id ? " | " + modelData.window_id : "")
-                                color: Theme.textMuted
-                                font.pixelSize: 11
-                            }
-                        }
-
-                        Button {
-                            text: modelData.active ? "Active" : "Activate"
-                            onClicked: permissionClient.selectActiveApp(modelData.app_id)
-                        }
-
-                        Button {
-                            text: "Restart"
-                            onClicked: permissionClient.restartOpenApp(modelData.app_id)
-                        }
-
-                        Button {
-                            text: "Close"
-                            onClicked: permissionClient.closeOpenApp(modelData.app_id)
-                        }
+                    SectionHeader {
+                        title: "Spaces"
+                        subtitle: "Контексты работы Velyx OS"
                     }
 
+                    ListView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: Theme.space3
+                        model: permissionClient.spaces
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: ListView.view.width
+                            height: 74
+                            radius: 16
+                            color: modelData.active === "true" ? Theme.surface3 : Theme.surface1
+                            border.width: 1
+                            border.color: modelData.active === "true" ? Theme.accentStrong : Theme.strokeSubtle
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 14
+                                spacing: Theme.space3
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+
+                                    Label {
+                                        text: modelData.display_name ? modelData.display_name : modelData.space_id
+                                        color: Theme.textPrimary
+                                        font.pixelSize: 15
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    Label {
+                                        text: modelData.space_id + " | " + (modelData.source ? modelData.source : "user")
+                                            + " | " + (modelData.runtime_state ? modelData.runtime_state : "unknown")
+                                        color: Theme.textSecondary
+                                        font.pixelSize: 12
+                                    }
+
+                                    Label {
+                                        text: "security=" + (modelData.security_mode ? modelData.security_mode : "-")
+                                            + " | preferred="
+                                            + (modelData.preferred_active_app ? modelData.preferred_active_app : "-")
+                                        color: Theme.textMuted
+                                        font.pixelSize: 11
+                                    }
+                                }
+
+                                Button {
+                                    text: modelData.active === "true" ? "Active" : "Activate"
+                                    enabled: modelData.active !== "true"
+                                    onClicked: permissionClient.activateSpace(modelData.space_id)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            Card {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                fillColor: Theme.surface2
+
+                ColumnLayout {
+                    anchors.fill: parent
+                    spacing: Theme.space3
+
+                    SectionHeader {
+                        title: "Open Apps"
+                        subtitle: "Apps in active space vs outside current context"
+                    }
+
+                    ListView {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        spacing: Theme.space3
+                        model: permissionClient.openApps
+
+                        delegate: Rectangle {
+                            required property var modelData
+                            width: ListView.view.width
+                            height: 68
+                            radius: 16
+                            color: modelData.active ? Theme.surface3 : Theme.surface2
+                            border.width: 1
+                            border.color: modelData.active ? Theme.accentStrong : Theme.strokeSubtle
+
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.margins: 14
+                                spacing: Theme.space3
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+
+                                    Label {
+                                        text: modelData.display_name ? modelData.display_name : modelData.app_id
+                                        color: Theme.textPrimary
+                                        font.pixelSize: 15
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    Label {
+                                        text: modelData.app_id + " | state=" + modelData.state
+                                            + (modelData.pid ? " | pid=" + modelData.pid : "")
+                                            + (modelData.in_active_space === true ? " | in-space" : " | outside-space")
+                                        color: Theme.textSecondary
+                                        font.pixelSize: 12
+                                    }
+
+                                    Label {
+                                        text: (modelData.window_title ? modelData.window_title : "окно не найдено")
+                                            + " | "
+                                            + (modelData.window_state ? modelData.window_state : "no_window")
+                                            + (modelData.window_id ? " | " + modelData.window_id : "")
+                                        color: Theme.textMuted
+                                        font.pixelSize: 11
+                                    }
+                                }
+
+                                Button {
+                                    text: modelData.active ? "Active" : "Activate"
+                                    onClicked: permissionClient.selectActiveApp(modelData.app_id)
+                                }
+
+                                Button {
+                                    text: "Restart"
+                                    onClicked: permissionClient.restartOpenApp(modelData.app_id)
+                                }
+
+                                Button {
+                                    text: "Close"
+                                    onClicked: permissionClient.closeOpenApp(modelData.app_id)
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

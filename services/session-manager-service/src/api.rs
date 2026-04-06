@@ -3,7 +3,10 @@ use crate::errors::SessionManagerError;
 use crate::first_boot::{has_pending_first_boot, run_first_boot_flow};
 use crate::health::{check_optional_services, check_required_services, compute_session_health};
 use crate::model::{SessionHealthStatus, SessionSnapshot, SessionState};
-use crate::orchestrator::spawn_orchestrator_loop;
+use crate::orchestrator::{
+    activate_space as activate_space_registry, current_space_payload, list_spaces_payload, orchestrate_once,
+    spawn_orchestrator_loop,
+};
 use crate::shell_launch::build_shell_runtime;
 use crate::startup::bootstrap_session;
 use crate::state::SessionStateStore;
@@ -108,6 +111,54 @@ impl SessionManagerApi {
                 .collect::<Vec<_>>()
                 .join("|"),
         );
+        payload.insert(
+            "spaces_status".to_string(),
+            snapshot
+                .spaces
+                .iter()
+                .map(|space| {
+                    format!(
+                        "{}:{}:{}:{}:{}",
+                        space.space_id,
+                        space.runtime_state,
+                        space.active,
+                        space.source,
+                        space.preferred_active_app.clone().unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("|"),
+        );
+        payload.insert(
+            "active_space_id".to_string(),
+            snapshot.active_space_id.clone().unwrap_or_default(),
+        );
+        payload.insert(
+            "active_space_name".to_string(),
+            snapshot.active_space_name.clone().unwrap_or_default(),
+        );
+        payload.insert(
+            "active_space_state".to_string(),
+            snapshot.active_space_state.clone().unwrap_or_default(),
+        );
+        payload.insert(
+            "active_space_security_mode".to_string(),
+            snapshot
+                .active_space_security_mode
+                .clone()
+                .unwrap_or_default(),
+        );
+        payload.insert(
+            "active_space_preferred_active_app".to_string(),
+            snapshot
+                .active_space_preferred_active_app
+                .clone()
+                .unwrap_or_default(),
+        );
+        payload.insert(
+            "active_space_apps".to_string(),
+            snapshot.active_space_apps.join(","),
+        );
         payload
     }
 
@@ -189,6 +240,39 @@ impl SessionManagerApi {
 
     async fn get_session_state(&self) -> zbus::fdo::Result<HashMap<String, String>> {
         self.get_session_status().await
+    }
+
+    async fn list_spaces(&self) -> zbus::fdo::Result<Vec<HashMap<String, String>>> {
+        let state = self.state.lock().await;
+        Ok(list_spaces_payload(&self.base_dir, &state.snapshot()))
+    }
+
+    async fn get_current_space(&self) -> zbus::fdo::Result<HashMap<String, String>> {
+        let state = self.state.lock().await;
+        Ok(current_space_payload(&self.base_dir, &state.snapshot()))
+    }
+
+    async fn activate_space(&self, space_id: &str) -> zbus::fdo::Result<HashMap<String, String>> {
+        let user_id = {
+            let state = self.state.lock().await;
+            state.snapshot().active_user_id
+        };
+        self.audit
+            .log_transition(
+                "space_activate_begin",
+                "",
+                space_id,
+                &user_id,
+                "",
+                "pending",
+                "space activation requested",
+            )
+            .map_err(zbus::fdo::Error::Failed)?;
+        activate_space_registry(&self.base_dir, space_id).map_err(zbus::fdo::Error::Failed)?;
+        self.ensure_orchestrator_running(&user_id).await;
+        orchestrate_once(&self.state, &self.audit, &self.base_dir, &user_id).await;
+        let state = self.state.lock().await;
+        Ok(current_space_payload(&self.base_dir, &state.snapshot()))
     }
 
     async fn get_session_health(&self) -> zbus::fdo::Result<HashMap<String, String>> {
