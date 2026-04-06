@@ -15,6 +15,8 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString activeAppId READ activeAppId NOTIFY activeAppChanged)
     Q_PROPERTY(QString activeAppTitle READ activeAppTitle NOTIFY activeAppChanged)
     Q_PROPERTY(QString activeWindowId READ activeWindowId NOTIFY activeAppChanged)
+    Q_PROPERTY(QString activeWindowTitle READ activeWindowTitle NOTIFY activeAppChanged)
+    Q_PROPERTY(QString activeRuntimeState READ activeRuntimeState NOTIFY activeAppChanged)
     Q_PROPERTY(QString launchStatus READ launchStatus NOTIFY launchStatusChanged)
     Q_PROPERTY(QString launchResultMessage READ launchResultMessage NOTIFY launchResultMessageChanged)
     Q_PROPERTY(QString lastAction READ lastAction NOTIFY statusDetailsChanged)
@@ -55,6 +57,8 @@ public:
     QString activeAppId() const;
     QString activeAppTitle() const;
     QString activeWindowId() const;
+    QString activeWindowTitle() const;
+    QString activeRuntimeState() const;
     QString launchStatus() const;
     QString launchResultMessage() const;
     QString lastAction() const;
@@ -112,6 +116,8 @@ private:
     QString m_activeAppId;
     QString m_activeAppTitle;
     QString m_activeWindowId;
+    QString m_activeWindowTitle;
+    QString m_activeRuntimeState;
     QString m_pendingAppId;
     QString m_pendingAppName;
     QString m_pendingPermission;

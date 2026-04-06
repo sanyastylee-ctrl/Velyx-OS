@@ -179,6 +179,22 @@ ApplicationWindow {
                     ? permissionClient.activeWindowId
                     : "Окно не привязано"
             }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Active window title"
+                subtitle: permissionClient.activeWindowTitle.length > 0
+                    ? permissionClient.activeWindowTitle
+                    : "Нет активного реального окна"
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Active runtime"
+                subtitle: permissionClient.activeRuntimeState.length > 0
+                    ? permissionClient.activeRuntimeState
+                    : "inactive"
+            }
         }
     }
 
