@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QHash>
 #include <QString>
 #include <QVariantList>
 #include <QVariantMap>
@@ -98,6 +99,7 @@ signals:
     void inputStatusChanged();
 
 private:
+    QVariantMap cachedAppInfo(const QString &appId) const;
     QVariantMap fetchAppInfo(const QString &appId);
     void requestLaunchFromLauncher(
         const QString &appId,
@@ -130,6 +132,7 @@ private:
     QString m_activeRuntimeState;
     QString m_inputControlMode {"disabled"};
     QString m_shortcutFeedback;
+    QHash<QString, QString> m_windowAuditState;
     QString m_pendingAppId;
     QString m_pendingAppName;
     QString m_pendingPermission;

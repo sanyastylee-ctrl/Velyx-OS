@@ -186,6 +186,22 @@ QString PermissionClient::sessionHealth() const
     return m_sessionHealth;
 }
 
+QVariantMap PermissionClient::cachedAppInfo(const QString &appId) const
+{
+    if (m_selectedAppInfo.value("app_id").toString() == appId) {
+        return m_selectedAppInfo;
+    }
+
+    for (const QVariant &entry : m_apps) {
+        const QVariantMap app = entry.toMap();
+        if (app.value("app_id").toString() == appId) {
+            return app;
+        }
+    }
+
+    return {};
+}
+
 void PermissionClient::refreshApps()
 {
     refreshRuntimeStatus();
@@ -225,8 +241,10 @@ void PermissionClient::refreshApps()
         }
     }
 
-    m_apps = apps;
-    emit appsChanged();
+    if (m_apps != apps) {
+        m_apps = apps;
+        emit appsChanged();
+    }
     updateStatusDetails("list_apps", "ok", QString("count=%1").arg(m_apps.size()), "select_app");
 
     if (!m_apps.isEmpty() && m_selectedAppInfo.isEmpty()) {
@@ -253,10 +271,14 @@ void PermissionClient::refreshOpenApps()
 
     const QString systemActiveWindowId = querySystemActiveWindowId();
     QVariantList openApps;
+    QHash<QString, QString> nextWindowAuditState;
     for (const QVariant &item : reply.arguments().constFirst().toList()) {
         QVariantMap runtime = item.toMap();
         const QString appId = runtime.value("app_id").toString();
-        const QVariantMap info = fetchAppInfo(appId);
+        QVariantMap info = cachedAppInfo(appId);
+        if (info.isEmpty()) {
+            info = fetchAppInfo(appId);
+        }
         const QVariantMap sessionApp = m_sessionApps.value(appId).toMap();
         const QVariantMap window = discoverWindowForPid(runtime.value("pid").toString());
         runtime.insert("display_name", info.value("display_name", appId));
@@ -281,11 +303,46 @@ void PermissionClient::refreshOpenApps()
             !systemActiveWindowId.isEmpty() && window.value("window_id").toString() == systemActiveWindowId);
         runtime.insert("closable", true);
         runtime.insert("active", appId == m_activeAppId);
+        const QString bindingState = QString("%1|%2|%3|%4")
+                                         .arg(runtime.value("window_id").toString(),
+                                              runtime.value("window_state").toString(),
+                                              runtime.value("pid").toString(),
+                                              runtime.value("state").toString());
+        nextWindowAuditState.insert(appId, bindingState);
+        if (m_windowAuditState.value(appId) != bindingState) {
+            logShellEvent(
+                "shell_window_discovery_begin",
+                appId,
+                QString("pid=%1 previous=%2").arg(
+                    runtime.value("pid").toString(),
+                    m_windowAuditState.value(appId)));
+            if (runtime.value("has_window").toBool()) {
+                logShellEvent(
+                    "shell_window_discovered",
+                    appId,
+                    QString("pid=%1 window_id=%2 title=%3 state=%4")
+                        .arg(runtime.value("pid").toString(),
+                             runtime.value("window_id").toString(),
+                             runtime.value("window_title").toString(),
+                             runtime.value("window_state").toString()));
+            } else {
+                logShellEvent(
+                    "shell_window_not_found",
+                    appId,
+                    QString("pid=%1 runtime_state=%2")
+                        .arg(runtime.value("pid").toString(),
+                             runtime.value("state").toString()));
+            }
+            logShellEvent("shell_window_binding_updated", appId, bindingState);
+        }
         openApps.push_back(runtime);
     }
 
-    m_openApps = openApps;
-    emit openAppsChanged();
+    m_windowAuditState = nextWindowAuditState;
+    if (m_openApps != openApps) {
+        m_openApps = openApps;
+        emit openAppsChanged();
+    }
     reconcileActiveApp();
 }
 
@@ -399,7 +456,10 @@ QVariantMap PermissionClient::fetchAppRuntime(const QString &appId)
 
 void PermissionClient::selectApp(const QString &appId)
 {
-    const QVariantMap info = fetchAppInfo(appId);
+    QVariantMap info = cachedAppInfo(appId);
+    if (info.isEmpty()) {
+        info = fetchAppInfo(appId);
+    }
     if (info.isEmpty()) {
         updateLaunchState("error", "Не удалось получить информацию о приложении");
         updateStatusDetails("get_app_info", "error", "app_info_unavailable", "retry");
@@ -473,8 +533,10 @@ void PermissionClient::refreshSelectedAppRuntime()
     updated.insert("window_visible", window.value("is_visible", false));
     updated.insert("window_mapped", window.value("is_mapped", false));
     updated.insert("window_active", window.value("window_id").toString() == querySystemActiveWindowId());
-    m_selectedAppInfo = updated;
-    emit selectedAppInfoChanged();
+    if (m_selectedAppInfo != updated) {
+        m_selectedAppInfo = updated;
+        emit selectedAppInfoChanged();
+    }
     refreshOpenApps();
 }
 
@@ -988,19 +1050,6 @@ void PermissionClient::reconcileActiveApp()
         }
     }
 
-    for (const QVariant &entry : std::as_const(m_openApps)) {
-        const QVariantMap app = entry.toMap();
-        logShellEvent(
-            "shell_window_state_updated",
-            app.value("app_id").toString(),
-            QString("state=%1 pid=%2 active=%3 window_id=%4 visible=%5 mapped=%6")
-                .arg(app.value("state").toString(),
-                     app.value("pid").toString(),
-                     app.value("active").toBool() ? "true" : "false",
-                     app.value("window_id").toString(),
-                     app.value("is_visible").toBool() ? "true" : "false",
-                     app.value("is_mapped").toBool() ? "true" : "false"));
-    }
 }
 
 QVariantMap PermissionClient::discoverWindowForPid(const QString &pid) const
