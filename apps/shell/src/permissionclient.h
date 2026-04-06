@@ -72,8 +72,13 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString assistantPendingDetails READ assistantPendingDetails NOTIFY assistantStateChanged)
     Q_PROPERTY(QVariantList assistantHistory READ assistantHistory NOTIFY assistantStateChanged)
     Q_PROPERTY(bool devModeEnabled READ devModeEnabled NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devAgentMode READ devAgentMode NOTIFY devModeStateChanged)
     Q_PROPERTY(QString devOverlayPath READ devOverlayPath NOTIFY devModeStateChanged)
     Q_PROPERTY(QString devLastChange READ devLastChange NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devChangeClass READ devChangeClass NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devApplyStrategy READ devApplyStrategy NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devScope READ devScope NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devApprovalLevel READ devApprovalLevel NOTIFY devModeStateChanged)
     Q_PROPERTY(bool devVisualFeedbackActive READ devVisualFeedbackActive NOTIFY devModeStateChanged)
     Q_PROPERTY(bool devAutoRefine READ devAutoRefine NOTIFY devModeStateChanged)
     Q_PROPERTY(QString devLastScreenshotPath READ devLastScreenshotPath NOTIFY devModeStateChanged)
@@ -225,8 +230,13 @@ public:
     QString assistantPendingDetails() const;
     QVariantList assistantHistory() const;
     bool devModeEnabled() const;
+    QString devAgentMode() const;
     QString devOverlayPath() const;
     QString devLastChange() const;
+    QString devChangeClass() const;
+    QString devApplyStrategy() const;
+    QString devScope() const;
+    QString devApprovalLevel() const;
     bool devVisualFeedbackActive() const;
     bool devAutoRefine() const;
     QString devLastScreenshotPath() const;
@@ -364,8 +374,13 @@ private:
     QString m_assistantPendingDetails;
     QVariantList m_assistantHistory;
     bool m_devModeEnabled {false};
+    QString m_devAgentMode {"disabled"};
     QString m_devOverlayPath;
     QString m_devLastChange;
+    QString m_devChangeClass;
+    QString m_devApplyStrategy;
+    QString m_devScope;
+    QString m_devApprovalLevel;
     bool m_devVisualFeedbackActive {false};
     bool m_devAutoRefine {false};
     QString m_devLastScreenshotPath;

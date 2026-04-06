@@ -389,6 +389,11 @@ bool PermissionClient::devModeEnabled() const
     return m_devModeEnabled;
 }
 
+QString PermissionClient::devAgentMode() const
+{
+    return m_devAgentMode;
+}
+
 QString PermissionClient::devOverlayPath() const
 {
     return m_devOverlayPath;
@@ -397,6 +402,26 @@ QString PermissionClient::devOverlayPath() const
 QString PermissionClient::devLastChange() const
 {
     return m_devLastChange;
+}
+
+QString PermissionClient::devChangeClass() const
+{
+    return m_devChangeClass;
+}
+
+QString PermissionClient::devApplyStrategy() const
+{
+    return m_devApplyStrategy;
+}
+
+QString PermissionClient::devScope() const
+{
+    return m_devScope;
+}
+
+QString PermissionClient::devApprovalLevel() const
+{
+    return m_devApprovalLevel;
 }
 
 bool PermissionClient::devVisualFeedbackActive() const
@@ -1017,8 +1042,13 @@ void PermissionClient::refreshDevModeState()
     const QString statePath = QDir::home().filePath(".velyx/dev_mode.json");
 
     bool enabled = false;
+    QString devAgentMode;
     QString overlayPath;
     QString lastChange;
+    QString devChangeClass;
+    QString devApplyStrategy;
+    QString devScope;
+    QString devApprovalLevel;
     bool visualFeedbackActive = false;
     bool autoRefine = false;
     QString lastScreenshotPath;
@@ -1033,8 +1063,13 @@ void PermissionClient::refreshDevModeState()
         if (document.isObject()) {
             const QJsonObject object = document.object();
             enabled = object.value("enabled").toBool(false);
+            devAgentMode = object.value("dev_agent_mode").toString();
             overlayPath = object.value("overlay_root").toString();
             lastChange = object.value("last_change_summary").toString();
+            devChangeClass = object.value("dev_agent_change_class").toString();
+            devApplyStrategy = object.value("dev_agent_apply_strategy").toString();
+            devScope = object.value("dev_agent_scope").toString();
+            devApprovalLevel = object.value("dev_agent_approval_level").toString();
             visualFeedbackActive = object.value("visual_feedback_active").toBool(false);
             autoRefine = object.value("auto_refine").toBool(false);
             lastScreenshotPath = object.value("last_screenshot").toString();
@@ -1050,12 +1085,32 @@ void PermissionClient::refreshDevModeState()
         m_devModeEnabled = enabled;
         changed = true;
     }
+    if (m_devAgentMode != devAgentMode) {
+        m_devAgentMode = devAgentMode;
+        changed = true;
+    }
     if (m_devOverlayPath != overlayPath) {
         m_devOverlayPath = overlayPath;
         changed = true;
     }
     if (m_devLastChange != lastChange) {
         m_devLastChange = lastChange;
+        changed = true;
+    }
+    if (m_devChangeClass != devChangeClass) {
+        m_devChangeClass = devChangeClass;
+        changed = true;
+    }
+    if (m_devApplyStrategy != devApplyStrategy) {
+        m_devApplyStrategy = devApplyStrategy;
+        changed = true;
+    }
+    if (m_devScope != devScope) {
+        m_devScope = devScope;
+        changed = true;
+    }
+    if (m_devApprovalLevel != devApprovalLevel) {
+        m_devApprovalLevel = devApprovalLevel;
         changed = true;
     }
     if (m_devVisualFeedbackActive != visualFeedbackActive) {

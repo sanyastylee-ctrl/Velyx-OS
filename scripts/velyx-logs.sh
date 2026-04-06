@@ -62,7 +62,10 @@ for file in \
   "${STATE_DIR}/assistant_state.json" \
   "${STATE_DIR}/assistant_feedback.jsonl" \
   "${STATE_DIR}/dev_mode.log" \
-  "${STATE_DIR}/dev_mode.json"
+  "${STATE_DIR}/dev_mode.json" \
+  "${STATE_DIR}/dev_mode_config.json" \
+  "${STATE_DIR}/dev_history.json" \
+  "${STATE_DIR}/dev_agent.log"
 do
   if [[ -f "${file}" ]]; then
     echo "-- ${file} --"

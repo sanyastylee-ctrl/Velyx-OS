@@ -34,10 +34,14 @@ ENV = load_env_file()
 ROOT_DIR = Path(__file__).resolve().parent.parent
 STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
 DEV_MODE_FILE = STATE_DIR / "dev_mode.json"
+DEV_MODE_CONFIG_FILE = STATE_DIR / "dev_mode_config.json"
+DEV_HISTORY_FILE = STATE_DIR / "dev_history.json"
 DEV_LOG = STATE_DIR / "dev_mode.log"
+DEV_AGENT_LOG = STATE_DIR / "dev_agent.log"
 OVERLAY_ROOT = STATE_DIR / "dev_overlay"
 OVERLAY_HISTORY = STATE_DIR / "dev_overlay_history"
 OVERLAY_SNAPSHOTS = STATE_DIR / "dev_overlay_snapshots"
+DEV_PATCHES_ROOT = STATE_DIR / "dev_patches"
 SCREENSHOT_ROOT = STATE_DIR / "dev_screenshots"
 BASE_SHELL_QML = ROOT_DIR / "apps" / "shell" / "qml"
 BASE_SHELL_SRC = ROOT_DIR / "apps" / "shell" / "src"
@@ -47,6 +51,26 @@ ALLOWED_ROOTS = {
     "apps/shell/src": BASE_SHELL_SRC,
     "packages/design-system/qml/Velyx/DesignSystem/Theme.qml": BASE_THEME,
 }
+LIVE_SCOPE_PREFIXES = [
+    "apps/shell/qml/",
+    "apps/shell/src/",
+    "packages/design-system/qml/Velyx/DesignSystem/Theme.qml",
+]
+STAGED_SCOPE_PREFIXES = [
+    "services/",
+    "scripts/velyx-assistant",
+    "scripts/velyx-ai",
+    "scripts/velyx-agent",
+    "scripts/velyx-intent",
+    "scripts/velyx-rule",
+    "scripts/velyx-model",
+    "scripts/velyx-firstboot",
+    "scripts/velyx-installer",
+    "scripts/velyx-diagnostics",
+    "apps/shell/qml/",
+    "apps/shell/src/",
+    "docs/",
+]
 MAX_HISTORY = 12
 MAX_VISUAL_ITERATIONS = 2
 
@@ -79,13 +103,71 @@ def log_event(event: str, status: str, detail: str = "") -> None:
         handle.write(f"{now_iso()} event={event} status={status} {detail}\n")
 
 
-def default_state() -> dict[str, Any]:
+def log_agent_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with DEV_AGENT_LOG.open("a", encoding="utf-8") as handle:
+        handle.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def default_config() -> dict[str, Any]:
     return {
         "enabled": False,
+        "mode": "disabled",
+        "allowed_scopes": LIVE_SCOPE_PREFIXES,
+        "auto_apply_live_changes": False,
+        "max_files_per_change": 4,
+        "allow_system_staging": False,
+        "allow_reboot_required_changes": False,
+        "visual_feedback_enabled": True,
+        "keep_patch_history": True,
+    }
+
+
+def ensure_config() -> dict[str, Any]:
+    config = read_json(DEV_MODE_CONFIG_FILE, {})
+    defaults = default_config()
+    changed = False
+    for key, value in defaults.items():
+        if key not in config:
+            config[key] = value
+            changed = True
+    if config.get("mode") == "disabled":
+        config["enabled"] = False
+    if changed or not DEV_MODE_CONFIG_FILE.exists():
+        write_json(DEV_MODE_CONFIG_FILE, config)
+    return config
+
+
+def save_config(config: dict[str, Any]) -> None:
+    write_json(DEV_MODE_CONFIG_FILE, config)
+
+
+def default_history() -> dict[str, Any]:
+    return {"changes": []}
+
+
+def ensure_history() -> dict[str, Any]:
+    history = read_json(DEV_HISTORY_FILE, {})
+    if "changes" not in history or not isinstance(history.get("changes"), list):
+        history = default_history()
+        write_json(DEV_HISTORY_FILE, history)
+    return history
+
+
+def save_history(history: dict[str, Any]) -> None:
+    write_json(DEV_HISTORY_FILE, history)
+
+
+def default_state() -> dict[str, Any]:
+    config = ensure_config()
+    history = ensure_history()
+    return {
+        "enabled": bool(config.get("enabled", False)),
+        "dev_agent_mode": config.get("mode", "disabled"),
         "overlay_root": str(OVERLAY_ROOT),
         "source_root": str(ROOT_DIR),
-        "allowed_roots": list(ALLOWED_ROOTS.keys()),
-        "visual_feedback_active": True,
+        "allowed_roots": list(config.get("allowed_scopes", LIVE_SCOPE_PREFIXES)),
+        "visual_feedback_active": bool(config.get("visual_feedback_enabled", True)),
         "auto_refine": False,
         "max_visual_iterations": MAX_VISUAL_ITERATIONS,
         "last_change_id": "",
@@ -101,6 +183,16 @@ def default_state() -> dict[str, Any]:
         "previous_screenshot": "",
         "last_comparison": {},
         "history": [],
+        "dev_agent_last_request": "",
+        "dev_agent_last_plan_summary": "",
+        "dev_agent_change_class": "",
+        "dev_agent_apply_strategy": "",
+        "dev_agent_scope": "",
+        "dev_agent_affected_files": [],
+        "dev_agent_validation_status": "",
+        "dev_agent_approval_level": "",
+        "dev_agent_last_change_id": "",
+        "dev_agent_history_size": len(history.get("changes", [])),
         "updated_at": now_iso(),
     }
 
@@ -113,6 +205,13 @@ def ensure_state() -> dict[str, Any]:
         if key not in state:
             state[key] = value
             changed = True
+    config = ensure_config()
+    history = ensure_history()
+    state["enabled"] = bool(config.get("enabled", False))
+    state["dev_agent_mode"] = config.get("mode", "disabled")
+    state["allowed_roots"] = list(config.get("allowed_scopes", LIVE_SCOPE_PREFIXES))
+    state["visual_feedback_active"] = bool(config.get("visual_feedback_enabled", True))
+    state["dev_agent_history_size"] = len(history.get("changes", []))
     if changed or not DEV_MODE_FILE.exists():
         write_json(DEV_MODE_FILE, state)
     return state
@@ -159,39 +258,79 @@ def seed_overlay() -> None:
         shutil.copy2(BASE_THEME, theme_target)
 
 
-def enable_dev_mode() -> dict[str, Any]:
-    seed_overlay()
+def mode_to_config(mode: str) -> dict[str, Any]:
+    config = ensure_config()
+    if mode == "disabled":
+        config["enabled"] = False
+        config["mode"] = "disabled"
+        config["allowed_scopes"] = LIVE_SCOPE_PREFIXES
+        config["allow_system_staging"] = False
+        config["allow_reboot_required_changes"] = False
+    elif mode == "ui_live_only":
+        config["enabled"] = True
+        config["mode"] = "ui_live_only"
+        config["allowed_scopes"] = LIVE_SCOPE_PREFIXES
+        config["allow_system_staging"] = False
+        config["allow_reboot_required_changes"] = False
+    elif mode == "full_dev":
+        config["enabled"] = True
+        config["mode"] = "full_dev"
+        config["allowed_scopes"] = LIVE_SCOPE_PREFIXES + [scope for scope in STAGED_SCOPE_PREFIXES if scope not in LIVE_SCOPE_PREFIXES]
+        config["allow_system_staging"] = True
+        config["allow_reboot_required_changes"] = True
+    else:
+        raise DevModeError("Mode must be disabled, ui_live_only, or full_dev")
+    return config
+
+
+def set_dev_agent_mode(mode: str) -> dict[str, Any]:
+    config = mode_to_config(mode)
+    save_config(config)
+    if config["enabled"]:
+        seed_overlay()
     state = ensure_state()
-    state["enabled"] = True
+    state["enabled"] = bool(config["enabled"])
+    state["dev_agent_mode"] = config["mode"]
+    state["allowed_roots"] = list(config.get("allowed_scopes", []))
     save_state(state)
-    log_event("dev_mode_enabled", "ok", f"overlay={OVERLAY_ROOT}")
+    log_event("dev_mode_mode_changed", "ok", f"mode={mode}")
+    log_agent_event("dev_agent_mode_changed", "ok", f"mode={mode}")
     return {
-        "enabled": True,
-        "overlay_root": str(OVERLAY_ROOT),
-        "summary": "Dev Mode enabled. Shell will prefer the live overlay on restart.",
+        "enabled": bool(config["enabled"]),
+        "mode": config["mode"],
+        "summary": f"Dev Agent mode set to {config['mode']}.",
     }
+
+
+def enable_dev_mode() -> dict[str, Any]:
+    config = ensure_config()
+    target_mode = config.get("mode", "disabled")
+    if target_mode == "disabled":
+        target_mode = "ui_live_only"
+    result = set_dev_agent_mode(target_mode)
+    result["overlay_root"] = str(OVERLAY_ROOT)
+    result["summary"] = "Dev Mode enabled. Shell will prefer the live overlay on restart."
+    return result
 
 
 def disable_dev_mode() -> dict[str, Any]:
-    state = ensure_state()
-    state["enabled"] = False
-    save_state(state)
-    log_event("dev_mode_disabled", "ok")
-    return {
-        "enabled": False,
-        "overlay_root": str(OVERLAY_ROOT),
-        "summary": "Dev Mode disabled. Shell will load the installed UI again on next restart.",
-    }
+    result = set_dev_agent_mode("disabled")
+    result["overlay_root"] = str(OVERLAY_ROOT)
+    result["summary"] = "Dev Mode disabled. Shell will load the installed UI again on next restart."
+    return result
 
 
 def status() -> dict[str, Any]:
     state = ensure_state()
+    config = ensure_config()
+    history = ensure_history()
     return {
         "enabled": bool(state.get("enabled", False)),
+        "mode": config.get("mode", "disabled"),
         "overlay_root": str(OVERLAY_ROOT),
         "visual_feedback_active": bool(state.get("visual_feedback_active", True)),
         "auto_refine": bool(state.get("auto_refine", False)),
-        "history_entries": len(state.get("history", [])),
+        "history_entries": len(history.get("changes", [])),
         "last_change_id": state.get("last_change_id", ""),
         "last_change_summary": state.get("last_change_summary", ""),
         "last_change_files": state.get("last_change_files", []),
@@ -200,6 +339,15 @@ def status() -> dict[str, Any]:
         "last_visual_summary": state.get("last_visual_summary", ""),
         "last_visual_recommendation": state.get("last_visual_recommendation", ""),
         "pending_refinement_request": state.get("pending_refinement_request", ""),
+        "dev_agent_last_request": state.get("dev_agent_last_request", ""),
+        "dev_agent_last_plan_summary": state.get("dev_agent_last_plan_summary", ""),
+        "dev_agent_change_class": state.get("dev_agent_change_class", ""),
+        "dev_agent_apply_strategy": state.get("dev_agent_apply_strategy", ""),
+        "dev_agent_scope": state.get("dev_agent_scope", ""),
+        "dev_agent_affected_files": state.get("dev_agent_affected_files", []),
+        "dev_agent_validation_status": state.get("dev_agent_validation_status", ""),
+        "dev_agent_approval_level": state.get("dev_agent_approval_level", ""),
+        "config": config,
     }
 
 
@@ -221,6 +369,37 @@ def list_ui_files(scope: str = "all") -> list[dict[str, str]]:
             if file_path.is_file():
                 entries.append({"path": str(file_path.relative_to(ROOT_DIR)).replace("\\", "/"), "kind": "file"})
     return entries
+
+
+def list_system_modules() -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    for prefix in ["services", "scripts", "docs", "apps/shell/qml", "apps/shell/src"]:
+        root = ROOT_DIR / prefix
+        if root.exists():
+            entries.append({"path": prefix, "kind": "module"})
+    return entries
+
+
+def validate_code_scope(relative_path: str) -> bool:
+    normalized = relative_path.replace("\\", "/").lstrip("/")
+    config = ensure_config()
+    return any(
+        normalized == scope.rstrip("/") or normalized.startswith(scope)
+        for scope in config.get("allowed_scopes", [])
+    )
+
+
+def read_dev_file(path_text: str) -> dict[str, Any]:
+    relative = path_text.replace("\\", "/").lstrip("/")
+    if not validate_code_scope(relative):
+        raise DevModeError(f"Path is outside dev agent scope: {relative}")
+    path = ROOT_DIR / relative
+    if not path.exists():
+        raise DevModeError(f"Dev file not found: {relative}")
+    return {
+        "path": relative,
+        "content": path.read_text(encoding="utf-8", errors="replace"),
+    }
 
 
 def read_ui_file(path_text: str) -> dict[str, Any]:
@@ -262,6 +441,38 @@ def search_ui_component(query: str) -> list[dict[str, Any]]:
     return results
 
 
+def search_code(query: str) -> list[dict[str, Any]]:
+    needle = query.strip().lower()
+    if not needle:
+        raise DevModeError("Missing code query")
+    results: list[dict[str, Any]] = []
+    for root_name in ["apps", "services", "scripts", "docs", "packages"]:
+        root = ROOT_DIR / root_name
+        if not root.exists():
+            continue
+        for path in root.rglob("*"):
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in {".qml", ".cpp", ".h", ".py", ".rs", ".json", ".sh", ".md", ""}:
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                continue
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if needle in line.lower():
+                    results.append(
+                        {
+                            "path": str(path.relative_to(ROOT_DIR)).replace("\\", "/"),
+                            "line": line_number,
+                            "preview": line.strip(),
+                        }
+                    )
+                    if len(results) >= 30:
+                        return results
+    return results
+
+
 def create_snapshot(summary: str = "manual snapshot") -> dict[str, Any]:
     state = ensure_state()
     snapshot_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
@@ -293,6 +504,133 @@ def ensure_enabled() -> dict[str, Any]:
         raise DevModeError("Dev Mode is disabled. Run 'velyx-dev enable' first.")
     seed_overlay()
     return state
+
+
+def approval_level_for(change_class: str, files: list[str]) -> str:
+    if change_class == "ui_live" and len(files) <= 1 and ensure_config().get("auto_apply_live_changes", False):
+        return "auto_apply_allowed"
+    if change_class == "forbidden":
+        return "forbidden"
+    return "explicit_approval_required"
+
+
+def classify_change(request: str) -> dict[str, Any]:
+    lowered = request.lower()
+    config = ensure_config()
+    mode = config.get("mode", "disabled")
+    if any(token in lowered for token in ["root ", "system32", "/etc/", "registry", "secret", "password", "token", "ssh key", "rm -rf"]):
+        return {
+            "change_class": "forbidden",
+            "apply_strategy": "deny",
+            "scope": "forbidden",
+            "reason": "The request targets files or actions outside the allowed development boundaries.",
+            "allowed": False,
+        }
+
+    ui_tokens = ["кноп", "button", "panel", "панель", "spacing", "gap", "card", "layout", "qml", "compact"]
+    shell_logic_tokens = ["assistant panel", "control center", "sidebar", "onboarding flow", "first boot", "installer ui", "panel behavior"]
+    noncritical_tokens = ["intent", "tool for assistant", "assistant tool", "routing", "model", "automation", "rules", "diagnostics", "spaces"]
+    critical_tokens = ["launcher", "session-manager", "update", "recovery", "install", "bootstrap", "permissions", "security core"]
+
+    if any(token in lowered for token in critical_tokens):
+        change_class = "runtime_critical"
+    elif any(token in lowered for token in noncritical_tokens):
+        change_class = "runtime_noncritical"
+    elif any(token in lowered for token in shell_logic_tokens):
+        change_class = "shell_logic"
+    elif any(token in lowered for token in ui_tokens):
+        change_class = "ui_live"
+    else:
+        change_class = "shell_logic"
+
+    if mode == "disabled":
+        return {
+            "change_class": change_class,
+            "apply_strategy": "deny",
+            "scope": "disabled",
+            "reason": "Dev Agent is disabled.",
+            "allowed": False,
+        }
+
+    if change_class == "ui_live":
+        return {
+            "change_class": change_class,
+            "apply_strategy": "live_apply",
+            "scope": "safe_live_scopes",
+            "reason": "This is a visual shell/UI tweak that can be applied through the live overlay.",
+            "allowed": True,
+        }
+    if change_class == "shell_logic":
+        return {
+            "change_class": change_class,
+            "apply_strategy": "live_apply" if mode == "ui_live_only" else "staged_update",
+            "scope": "shell_logic",
+            "reason": "This change touches shell behavior. It stays live only when safely contained to shell files.",
+            "allowed": True,
+        }
+    if change_class == "runtime_noncritical":
+        allowed = mode == "full_dev" and config.get("allow_system_staging", False)
+        return {
+            "change_class": change_class,
+            "apply_strategy": "staged_update" if allowed else "deny",
+            "scope": "staged_update_scopes",
+            "reason": "This is a non-critical runtime change and should go through the staged update path.",
+            "allowed": allowed,
+        }
+    if change_class == "runtime_critical":
+        allowed = mode == "full_dev" and config.get("allow_reboot_required_changes", False)
+        return {
+            "change_class": change_class,
+            "apply_strategy": "reboot_required" if allowed else "deny",
+            "scope": "critical_runtime_scopes",
+            "reason": "This change touches critical runtime paths and should be treated as reboot-required.",
+            "allowed": allowed,
+        }
+    return {
+        "change_class": "forbidden",
+        "apply_strategy": "deny",
+        "scope": "forbidden",
+        "reason": "The request could not be mapped to a safe development change class.",
+        "allowed": False,
+    }
+
+
+def list_qml_components() -> list[str]:
+    return sorted(path.name for path in BASE_SHELL_QML.glob("*.qml"))
+
+
+def resolve_dev_files(request: str, classification: dict[str, Any]) -> list[str]:
+    lowered = request.lower()
+    change_class = classification["change_class"]
+    if change_class in {"ui_live", "shell_logic"}:
+        if "assistant" in lowered or "button" in lowered or "кноп" in lowered:
+            return ["apps/shell/qml/AssistantPanel.qml"]
+        if "space" in lowered or "spaces" in lowered:
+            return ["apps/shell/qml/SpaceOverviewPanel.qml", "apps/shell/qml/Main.qml"]
+        if "control center" in lowered:
+            return ["apps/shell/qml/Main.qml", "apps/shell/qml/DetailsPanel.qml"]
+        if "first boot" in lowered or "onboarding" in lowered:
+            return ["apps/shell/qml/FirstBootOverlay.qml"]
+        return ["apps/shell/qml/Main.qml"]
+    if change_class == "runtime_noncritical":
+        if "intent" in lowered:
+            return ["scripts/velyx-intent", "docs/intents-system.md"]
+        if "tool" in lowered or "assistant" in lowered:
+            return ["scripts/velyx-assistant", "docs/assistant.md"]
+        if "routing" in lowered or "model" in lowered:
+            return ["scripts/velyx-model", "scripts/velyx-ai", "docs/local-model-runtime.md"]
+        if "diagnostic" in lowered or "recovery ux" in lowered:
+            return ["scripts/velyx-diagnostics", "apps/shell/qml/DiagnosticsPanel.qml"]
+        return ["scripts/velyx-assistant"]
+    if change_class == "runtime_critical":
+        if "recovery" in lowered:
+            return ["scripts/velyx-recovery", "scripts/velyx-update"]
+        if "install" in lowered or "bootstrap" in lowered:
+            return ["scripts/velyx-install.sh", "scripts/velyx-installer"]
+        if "permissions" in lowered:
+            return ["services/permissions-service", "apps/shell/src/permissionclient.cpp"]
+        return ["scripts/velyx-update", "scripts/velyx-install.sh"]
+    return []
 
 
 def add_compact_button_markers(content: str) -> str:
@@ -354,75 +692,88 @@ def widen_right_rail(content: str) -> str:
     return content.replace("Layout.preferredWidth: 390", "Layout.preferredWidth: 430", 1)
 
 
-def build_changes(request: str) -> list[dict[str, Any]]:
-    lowered = request.lower()
-    changes: list[dict[str, Any]] = []
-    if any(token in lowered for token in ["кноп", "button"]) and any(token in lowered for token in ["мень", "small", "compact", "компакт"]):
-        relative = "apps/shell/qml/AssistantPanel.qml"
-        current = read_ui_file(relative)["content"]
-        updated = add_compact_button_markers(current)
-        changes.append(
-            {
-                "path": relative,
-                "summary": "Made assistant action buttons more compact.",
-                "before": current,
-                "after": updated,
-            }
-        )
-        return changes
-
-    if any(token in lowered for token in ["spacing", "gap", "отступ", "distance", "tighten", "compact the spacing", "разреж", "плотн"]):
-        relative = "apps/shell/qml/AssistantPanel.qml"
-        current = read_ui_file(relative)["content"]
-        updated = tighten_assistant_spacing(current)
-        changes.append(
-            {
-                "path": relative,
-                "summary": "Tightened the spacing in the assistant action area.",
-                "before": current,
-                "after": updated,
-            }
-        )
-        return changes
-
-    if any(token in lowered for token in ["панель", "panel"]) and any(token in lowered for token in ["вправ", "right", "шир", "wider"]):
-        relative = "apps/shell/qml/Main.qml"
-        current = read_ui_file(relative)["content"]
-        updated = widen_right_rail(current)
-        changes.append(
-            {
-                "path": relative,
-                "summary": "Shifted emphasis to the right rail by widening it.",
-                "before": current,
-                "after": updated,
-            }
-        )
-        return changes
-
-    if any(token in lowered for token in ["добав", "add"]) and any(token in lowered for token in ["кноп", "button"]):
-        relative = "apps/shell/qml/AssistantPanel.qml"
-        current = read_ui_file(relative)["content"]
-        match = re.search(r'["“](.+?)["”]', request)
-        label = match.group(1).strip() if match else "Quick action"
-        neighbor = "Create Note"
-        if "browser" in lowered or "брауз" in lowered:
-            neighbor = "Open Browser"
-        elif "development" in lowered or "dev" in lowered:
-            neighbor = "Development"
-        updated = insert_button_after(current, neighbor, label)
-        changes.append(
-            {
-                "path": relative,
-                "summary": f'Added a new quick action button "{label}".',
-                "before": current,
-                "after": updated,
-            }
-        )
-        return changes
-
-    raise DevModeError(
-        "UI request is outside the current dev-mode skill set. Supported examples: compact buttons, move panel right, add a quick action button."
+def insert_default_intent(content: str, intent_id: str, display_name: str, target_space: str = "general") -> str:
+    if f'"intent_id": "{intent_id}"' in content:
+        return content
+    timestamp = now_iso()
+    block = (
+        "            {\n"
+        f'                "intent_id": "{intent_id}",\n'
+        f'                "display_name": "{display_name}",\n'
+        f'                "description": "Added by Velyx Dev Agent for {display_name}.",\n'
+        f'                "target_space": "{target_space}",\n'
+        '                "actions": [],\n'
+        '                "auto_focus": True,\n'
+        '                "ensure_apps": True,\n'
+        '                "restart_policy": "space_default",\n'
+        '                "status": "enabled",\n'
+        f'                "created_at": "{timestamp}",\n'
+        f'                "updated_at": "{timestamp}",\n'
+        '                "source": "system",\n'
+        "            },\n"
     )
+    needle = '        "intents": [\n'
+    if needle not in content:
+        raise DevModeError("Could not find the default intents list in velyx-intent")
+    return content.replace(needle, needle + block, 1)
+
+
+def build_changes(request: str, classification: dict[str, Any]) -> list[dict[str, Any]]:
+    lowered = request.lower()
+    change_class = classification["change_class"]
+    changes: list[dict[str, Any]] = []
+    if change_class in {"ui_live", "shell_logic"}:
+        if any(token in lowered for token in ["кноп", "button"]) and any(token in lowered for token in ["мень", "small", "compact", "компакт"]):
+            relative = "apps/shell/qml/AssistantPanel.qml"
+            current = read_ui_file(relative)["content"]
+            updated = add_compact_button_markers(current)
+            changes.append({"path": relative, "summary": "Made assistant action buttons more compact.", "before": current, "after": updated, "target": "overlay"})
+            return changes
+
+        if any(token in lowered for token in ["spacing", "gap", "отступ", "distance", "tighten", "compact the spacing", "разреж", "плотн"]):
+            relative = "apps/shell/qml/AssistantPanel.qml"
+            current = read_ui_file(relative)["content"]
+            updated = tighten_assistant_spacing(current)
+            changes.append({"path": relative, "summary": "Tightened the spacing in the assistant action area.", "before": current, "after": updated, "target": "overlay"})
+            return changes
+
+        if any(token in lowered for token in ["панель", "panel"]) and any(token in lowered for token in ["вправ", "right", "шир", "wider"]):
+            relative = "apps/shell/qml/Main.qml"
+            current = read_ui_file(relative)["content"]
+            updated = widen_right_rail(current)
+            changes.append({"path": relative, "summary": "Shifted emphasis to the right rail by widening it.", "before": current, "after": updated, "target": "overlay"})
+            return changes
+
+        if any(token in lowered for token in ["добав", "add"]) and any(token in lowered for token in ["кноп", "button"]):
+            relative = "apps/shell/qml/AssistantPanel.qml"
+            current = read_ui_file(relative)["content"]
+            match = re.search(r'["“](.+?)["”]', request)
+            label = match.group(1).strip() if match else "Quick action"
+            neighbor = "Create Note"
+            if "browser" in lowered or "брауз" in lowered:
+                neighbor = "Open Browser"
+            elif "development" in lowered or "dev" in lowered:
+                neighbor = "Development"
+            updated = insert_button_after(current, neighbor, label)
+            changes.append({"path": relative, "summary": f'Added a new quick action button "{label}".', "before": current, "after": updated, "target": "overlay"})
+            return changes
+
+        raise DevModeError("UI request is outside the current dev-mode skill set. Supported examples: compact buttons, move panel right, add a quick action button.")
+
+    if change_class == "runtime_noncritical":
+        if "intent" in lowered and any(token in lowered for token in ["добав", "add", "new"]):
+            relative = "scripts/velyx-intent"
+            current = (ROOT_DIR / relative).read_text(encoding="utf-8")
+            quoted = re.search(r'["“](.+?)["”]', request)
+            display_name = quoted.group(1).strip() if quoted else "Focus Session"
+            intent_id = re.sub(r"[^a-z0-9]+", "_", display_name.lower()).strip("_") or "focus_session"
+            target_space = "development" if "dev" in lowered or "разработ" in lowered else "general"
+            updated = insert_default_intent(current, intent_id, display_name, target_space=target_space)
+            changes.append({"path": relative, "summary": f'Added a new default intent "{intent_id}" to the intent registry seed.', "before": current, "after": updated, "target": "repo"})
+            return changes
+        raise DevModeError("This system development request was classified and scoped, but no safe patch template exists yet. Export a patch bundle or refine the request.")
+
+    raise DevModeError("No safe patch path is available for this request class.")
 
 
 def unified_diff(relative: str, before: str, after: str) -> str:
@@ -438,7 +789,10 @@ def unified_diff(relative: str, before: str, after: str) -> str:
 
 def preview_request(request: str) -> dict[str, Any]:
     ensure_enabled()
-    changes = build_changes(request)
+    classification = classify_change(request)
+    if not classification.get("allowed", False):
+        return plan_dev_request(request)
+    changes = build_changes(request, classification)
     previews = []
     for change in changes:
         previews.append(
@@ -453,50 +807,226 @@ def preview_request(request: str) -> dict[str, Any]:
         "status": "preview",
         "summary": f"Prepared {len(previews)} UI change(s).",
         "request": request,
+        "change_class": classification["change_class"],
+        "apply_strategy": classification["apply_strategy"],
+        "affected_files": [change["path"] for change in changes],
         "changes": previews,
     }
 
 
-def apply_request(request: str) -> dict[str, Any]:
-    state = ensure_enabled()
-    changes = build_changes(request)
-    change_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
-    backups_root = OVERLAY_HISTORY / change_id
+def validate_qml_file(path_text: str) -> dict[str, Any]:
+    path = overlay_path_for(path_text) if overlay_path_for(path_text).exists() else base_path_for(path_text)
+    if not path.exists():
+        return {"status": "failed", "summary": f"QML file not found: {path_text}"}
+    text = path.read_text(encoding="utf-8", errors="replace")
+    status = "ok" if text.count("{") >= text.count("}") and "import QtQuick" in text else "degraded"
+    return {"status": status, "summary": f"Validated {path_text}.", "details": "Brace balance and import checks completed."}
+
+
+def run_dev_validation(files: list[str] | None = None) -> dict[str, Any]:
+    files = files or []
+    results: list[dict[str, Any]] = []
+    overall = "ok"
+    for relative in files:
+        path = ROOT_DIR / relative
+        if relative.startswith("apps/shell/qml/"):
+            result = validate_qml_file(relative)
+        elif path.suffix == ".py" or relative.startswith("scripts/"):
+            proc = subprocess.run([sys.executable, "-m", "py_compile", str(path)], capture_output=True, text=True)
+            result = {
+                "status": "ok" if proc.returncode == 0 else "failed",
+                "summary": f"Validated {relative}.",
+                "details": proc.stderr.strip() or "py_compile passed",
+            }
+        else:
+            result = {"status": "degraded", "summary": f"No validator for {relative}.", "details": "Best-effort validation only."}
+        results.append(result)
+        if result["status"] == "failed":
+            overall = "failed"
+        elif result["status"] == "degraded" and overall == "ok":
+            overall = "degraded"
+    log_agent_event("dev_validation_run", overall, f"files={','.join(files)}")
+    return {"status": overall, "results": results}
+
+
+def plan_dev_request(request: str) -> dict[str, Any]:
+    state = ensure_state()
+    classification = classify_change(request)
+    files = resolve_dev_files(request, classification)
+    approval_level = approval_level_for(classification["change_class"], files)
+    summary = classification["reason"]
+    if files:
+        summary = f"{classification['reason']} Affected files: {', '.join(files[:4])}."
+    plan = {
+        "status": "planned" if classification["allowed"] else "denied",
+        "request": request,
+        "change_class": classification["change_class"],
+        "apply_strategy": classification["apply_strategy"],
+        "scope": classification["scope"],
+        "allowed": classification["allowed"],
+        "reason": classification["reason"],
+        "affected_files": files,
+        "approval_level": approval_level,
+        "summary": summary,
+    }
+    state["dev_agent_last_request"] = request
+    state["dev_agent_last_plan_summary"] = summary
+    state["dev_agent_change_class"] = classification["change_class"]
+    state["dev_agent_apply_strategy"] = classification["apply_strategy"]
+    state["dev_agent_scope"] = classification["scope"]
+    state["dev_agent_affected_files"] = files
+    state["dev_agent_approval_level"] = approval_level
+    save_state(state)
+    log_agent_event("dev_plan_created", "ok" if classification["allowed"] else "denied", f"class={classification['change_class']} strategy={classification['apply_strategy']}")
+    return plan
+
+
+def create_patch_bundle(change_id: str, request: str, plan: dict[str, Any], changes: list[dict[str, Any]]) -> dict[str, Any]:
+    bundle_root = DEV_PATCHES_ROOT / change_id
+    bundle_root.mkdir(parents=True, exist_ok=True)
+    diffs: list[dict[str, Any]] = []
+    for change in changes:
+        diff_text = unified_diff(change["path"], change["before"], change["after"])
+        diff_path = bundle_root / (change["path"].replace("/", "__") + ".diff")
+        diff_path.write_text(diff_text, encoding="utf-8")
+        diffs.append({"path": change["path"], "diff_path": str(diff_path)})
+    bundle = {
+        "change_id": change_id,
+        "request": request,
+        "plan": plan,
+        "diffs": diffs,
+        "created_at": now_iso(),
+    }
+    write_json(bundle_root / "bundle.json", bundle)
+    return {"bundle_root": str(bundle_root), "bundle": bundle}
+
+
+def record_change(
+    request: str,
+    classification: dict[str, Any],
+    changes: list[dict[str, Any]],
+    validation: dict[str, Any],
+    backup_root: Path,
+    bundle_root: str,
+) -> dict[str, Any]:
+    history = ensure_history()
+    state = ensure_state()
+    change_id = backup_root.name
+    entry = {
+        "change_id": change_id,
+        "request_text": request,
+        "classified_type": classification["change_class"],
+        "apply_mode": classification["apply_strategy"],
+        "affected_files": [change["path"] for change in changes],
+        "scope": classification["scope"],
+        "timestamp": now_iso(),
+        "validation_result": validation["status"],
+        "rollback_available": True,
+        "backup_root": str(backup_root),
+        "bundle_root": bundle_root,
+        "summary": "; ".join(change["summary"] for change in changes),
+    }
+    history.setdefault("changes", []).append(entry)
+    history["changes"] = history["changes"][-MAX_HISTORY:]
+    save_history(history)
+    state["history"] = history["changes"][-MAX_HISTORY:]
+    state["last_change_id"] = change_id
+    state["last_change_summary"] = entry["summary"]
+    state["last_change_files"] = entry["affected_files"]
+    state["dev_agent_last_change_id"] = change_id
+    state["dev_agent_last_request"] = request
+    state["dev_agent_last_plan_summary"] = entry["summary"]
+    state["dev_agent_change_class"] = classification["change_class"]
+    state["dev_agent_apply_strategy"] = classification["apply_strategy"]
+    state["dev_agent_scope"] = classification["scope"]
+    state["dev_agent_affected_files"] = entry["affected_files"]
+    state["dev_agent_validation_status"] = validation["status"]
+    state["dev_agent_approval_level"] = approval_level_for(classification["change_class"], entry["affected_files"])
+    state["dev_agent_history_size"] = len(history["changes"])
+    save_state(state)
+    return entry
+
+
+def stage_system_update(change_id: str, files: list[str]) -> dict[str, Any]:
+    log_agent_event("dev_stage_update", "ok", f"id={change_id} files={','.join(files)}")
+    return {
+        "status": "ok",
+        "summary": "System change staged in the working tree. Apply it through Velyx Update when you are ready.",
+        "change_id": change_id,
+        "files": files,
+    }
+
+
+def apply_system_update(change_id: str) -> dict[str, Any]:
+    result = subprocess.run(["velyx-update", "--source-root", str(ROOT_DIR)], capture_output=True, text=True, timeout=180)
+    if result.returncode != 0:
+        raise DevModeError(result.stderr.strip() or "Failed to apply staged system update")
+    log_agent_event("dev_apply_system_update", "ok", f"id={change_id}")
+    return {"status": "ok", "summary": "Staged system update applied through Velyx Update.", "details": result.stdout.strip()}
+
+
+def mark_reboot_required(change_id: str) -> dict[str, Any]:
+    log_agent_event("dev_mark_reboot_required", "ok", f"id={change_id}")
+    return {"status": "ok", "summary": "This change affects critical runtime paths. Restart the runtime and plan for a reboot/test cycle.", "change_id": change_id}
+
+
+def apply_changes_to_targets(changes: list[dict[str, Any]], backup_root: Path) -> list[str]:
     applied_files: list[str] = []
     for change in changes:
         relative = change["path"]
-        overlay = overlay_path_for(relative)
-        overlay.parent.mkdir(parents=True, exist_ok=True)
-        current = change["before"]
-        backup = backups_root / relative
+        before = change["before"]
+        target_mode = change.get("target", "overlay")
+        target = overlay_path_for(relative) if target_mode == "overlay" else (ROOT_DIR / relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        backup = backup_root / relative
         backup.parent.mkdir(parents=True, exist_ok=True)
-        backup.write_text(current, encoding="utf-8")
-        overlay.write_text(change["after"], encoding="utf-8")
+        backup.write_text(before, encoding="utf-8")
+        target.write_text(change["after"], encoding="utf-8")
         applied_files.append(relative)
-    history = list(state.get("history", []))
-    history.append(
-        {
-            "change_id": change_id,
-            "summary": "; ".join(change["summary"] for change in changes),
-            "files": applied_files,
-            "backup_root": str(backups_root),
-            "timestamp": now_iso(),
-        }
-    )
-    history = history[-MAX_HISTORY:]
-    state["history"] = history
-    state["last_change_id"] = change_id
-    state["last_change_summary"] = "; ".join(change["summary"] for change in changes)
-    state["last_change_files"] = applied_files
+    return applied_files
+
+
+def apply_dev_request(request: str) -> dict[str, Any]:
+    ensure_enabled()
+    plan = plan_dev_request(request)
+    if not plan.get("allowed", False):
+        raise DevModeError(plan.get("reason", "Dev change is not allowed"))
+    changes = build_changes(request, plan)
+    max_files = int(ensure_config().get("max_files_per_change", 4))
+    if len(changes) > max_files:
+        raise DevModeError(f"Dev change exceeds the max_files_per_change policy ({max_files})")
+    change_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    backup_root = OVERLAY_HISTORY / change_id if plan["apply_strategy"] == "live_apply" else DEV_PATCHES_ROOT / change_id / "backup"
+    applied_files = apply_changes_to_targets(changes, backup_root)
+    validation = run_dev_validation(applied_files)
+    bundle = create_patch_bundle(change_id, request, plan, changes)
+    entry = record_change(request, plan, changes, validation, backup_root, bundle["bundle_root"])
+    state = ensure_state()
     state["last_visual_request"] = request
     save_state(state)
-    log_event("dev_patch_applied", "ok", f"id={change_id} files={','.join(applied_files)}")
-    return {
-        "status": "ok",
+    result: dict[str, Any] = {
+        "status": "ok" if validation["status"] != "failed" else "failed",
         "change_id": change_id,
-        "summary": state["last_change_summary"],
+        "summary": entry["summary"],
         "files": applied_files,
+        "change_class": plan["change_class"],
+        "apply_strategy": plan["apply_strategy"],
+        "validation": validation,
+        "bundle_root": bundle["bundle_root"],
     }
+    if plan["apply_strategy"] == "live_apply":
+        result["restart"] = restart_shell_dev()
+    elif plan["apply_strategy"] == "staged_update":
+        result["staged"] = stage_system_update(change_id, applied_files)
+    elif plan["apply_strategy"] == "reboot_required":
+        result["reboot_required"] = mark_reboot_required(change_id)
+    log_event("dev_patch_applied", result["status"], f"id={change_id} files={','.join(applied_files)}")
+    log_agent_event("dev_apply_completed", result["status"], f"id={change_id} strategy={plan['apply_strategy']}")
+    return result
+
+
+def apply_request(request: str) -> dict[str, Any]:
+    return apply_dev_request(request)
 
 
 def screenshot_file_path(label: str = "ui") -> Path:
@@ -752,40 +1282,77 @@ def restart_shell_dev() -> dict[str, Any]:
     }
 
 
-def rollback_last_change() -> dict[str, Any]:
-    state = ensure_enabled()
-    history = list(state.get("history", []))
-    if not history:
-        raise DevModeError("No dev overlay changes available for rollback")
-    entry = history.pop()
-    backups_root = Path(entry["backup_root"])
+def history_list() -> dict[str, Any]:
+    return {"changes": ensure_history().get("changes", [])}
+
+
+def restore_change(change_id: str) -> dict[str, Any]:
+    history = ensure_history()
+    state = ensure_state()
+    entry = next((item for item in history.get("changes", []) if item.get("change_id") == change_id), None)
+    if not entry:
+        raise DevModeError(f"Change not found: {change_id}")
+    backup_root = Path(entry.get("backup_root", ""))
     restored: list[str] = []
-    for relative in entry.get("files", []):
-        backup = backups_root / relative
+    for relative in entry.get("affected_files", []):
+        backup = backup_root / relative
         if not backup.exists():
             continue
-        target = overlay_path_for(relative)
+        target = overlay_path_for(relative) if entry.get("apply_mode") == "live_apply" else (ROOT_DIR / relative)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(backup, target)
         restored.append(relative)
-    state["history"] = history
-    if history:
-        state["last_change_id"] = history[-1]["change_id"]
-        state["last_change_summary"] = history[-1]["summary"]
-        state["last_change_files"] = history[-1]["files"]
+    history["changes"] = [item for item in history.get("changes", []) if item.get("change_id") != change_id]
+    save_history(history)
+    state["history"] = history["changes"][-MAX_HISTORY:]
+    if history["changes"]:
+        last = history["changes"][-1]
+        state["last_change_id"] = last.get("change_id", "")
+        state["last_change_summary"] = last.get("summary", "")
+        state["last_change_files"] = last.get("affected_files", [])
     else:
         state["last_change_id"] = ""
         state["last_change_summary"] = ""
         state["last_change_files"] = []
+    state["dev_agent_history_size"] = len(history["changes"])
     save_state(state)
-    log_event("dev_rollback", "ok", f"id={entry.get('change_id', '')} files={','.join(restored)}")
-    restart = restart_shell_dev()
+    restart = restart_shell_dev() if entry.get("apply_mode") == "live_apply" else {"status": "ok", "summary": "Restore completed. Restart or apply update when appropriate."}
+    log_event("dev_restore", "ok", f"id={change_id}")
+    log_agent_event("dev_restore", "ok", f"id={change_id}")
+    return {"status": restart["status"], "summary": f"Restored {change_id}.", "files": restored, "restart": restart}
+
+
+def rollback_last_change() -> dict[str, Any]:
+    history = ensure_history()
+    if not history.get("changes"):
+        raise DevModeError("No dev changes available for rollback")
+    return restore_change(history["changes"][-1]["change_id"])
+
+
+def export_patch_bundle(change_id: str | None = None) -> dict[str, Any]:
+    history = ensure_history()
+    if not history.get("changes"):
+        raise DevModeError("No dev changes available for export")
+    entry = history["changes"][-1] if not change_id else next((item for item in history["changes"] if item.get("change_id") == change_id), None)
+    if not entry:
+        raise DevModeError(f"Change not found: {change_id}")
     return {
-        "status": restart["status"],
-        "summary": f"Rolled back {entry.get('change_id', 'last change')}.",
-        "files": restored,
-        "restart": restart,
+        "status": "ok",
+        "change_id": entry.get("change_id", ""),
+        "bundle_root": entry.get("bundle_root", ""),
+        "summary": f"Patch bundle exported at {entry.get('bundle_root', '')}.",
     }
+
+
+def create_dev_commit_message_suggestion(change_id: str | None = None) -> dict[str, Any]:
+    history = ensure_history()
+    if not history.get("changes"):
+        raise DevModeError("No dev changes available")
+    entry = history["changes"][-1] if not change_id else next((item for item in history["changes"] if item.get("change_id") == change_id), None)
+    if not entry:
+        raise DevModeError(f"Change not found: {change_id}")
+    message = f"{entry.get('classified_type', 'dev')}: {entry.get('summary', 'update Velyx dev change')}"
+    return {"status": "ok", "change_id": entry.get("change_id", ""), "message": message}
 
 
 def usage() -> str:
@@ -794,13 +1361,27 @@ def usage() -> str:
             "Usage:",
             "  velyx-dev enable",
             "  velyx-dev disable",
+            "  velyx-dev set-mode disabled|ui_live_only|full_dev",
             "  velyx-dev status",
             "  velyx-dev list-ui-files [all|qml|src|design]",
+            "  velyx-dev list-system-modules",
+            "  velyx-dev list-qml-components",
             "  velyx-dev search-ui-component <query>",
+            "  velyx-dev search-code <query>",
             "  velyx-dev read-ui-file <path>",
+            "  velyx-dev read-dev-file <path>",
             "  velyx-dev snapshot-ui-state",
             '  velyx-dev preview-ui-diff "<request>"',
             '  velyx-dev patch-ui-file "<request>"',
+            '  velyx-dev dev-agent-plan "<request>"',
+            '  velyx-dev dev-agent-apply "<request>"',
+            "  velyx-dev validate-code-scope <path>",
+            "  velyx-dev validate-qml-file <path>",
+            "  velyx-dev run-dev-validation [file1 file2 ...]",
+            "  velyx-dev history",
+            "  velyx-dev restore <change_id>",
+            "  velyx-dev export-patch-bundle [change_id]",
+            "  velyx-dev commit-message [change_id]",
             "  velyx-dev capture-ui-screenshot",
             "  velyx-dev get-last-screenshot",
             "  velyx-dev compare-screenshots <before> <after>",
@@ -814,6 +1395,8 @@ def usage() -> str:
 
 
 def main(argv: list[str]) -> int:
+    ensure_config()
+    ensure_history()
     ensure_state()
     if len(argv) < 2:
         print(usage(), file=sys.stderr)
@@ -826,6 +1409,11 @@ def main(argv: list[str]) -> int:
         if command == "disable":
             print_json(disable_dev_mode())
             return 0
+        if command == "set-mode":
+            if len(argv) < 3:
+                raise DevModeError("Missing dev mode")
+            print_json(set_dev_agent_mode(argv[2]))
+            return 0
         if command == "status":
             print_json(status())
             return 0
@@ -833,15 +1421,31 @@ def main(argv: list[str]) -> int:
             scope = argv[2] if len(argv) > 2 else "all"
             print_json({"files": list_ui_files(scope)})
             return 0
+        if command == "list-system-modules":
+            print_json({"modules": list_system_modules()})
+            return 0
+        if command == "list-qml-components":
+            print_json({"components": list_qml_components()})
+            return 0
         if command == "search-ui-component":
             if len(argv) < 3:
                 raise DevModeError("Missing component query")
             print_json({"results": search_ui_component(" ".join(argv[2:]))})
             return 0
+        if command == "search-code":
+            if len(argv) < 3:
+                raise DevModeError("Missing code query")
+            print_json({"results": search_code(" ".join(argv[2:]))})
+            return 0
         if command == "read-ui-file":
             if len(argv) < 3:
                 raise DevModeError("Missing UI file path")
             print_json(read_ui_file(argv[2]))
+            return 0
+        if command == "read-dev-file":
+            if len(argv) < 3:
+                raise DevModeError("Missing dev file path")
+            print_json(read_dev_file(argv[2]))
             return 0
         if command == "snapshot-ui-state":
             print_json(create_snapshot())
@@ -855,6 +1459,43 @@ def main(argv: list[str]) -> int:
             if len(argv) < 3:
                 raise DevModeError("Missing UI change request")
             print_json(apply_request(" ".join(argv[2:])))
+            return 0
+        if command == "dev-agent-plan":
+            if len(argv) < 3:
+                raise DevModeError("Missing dev agent request")
+            print_json(plan_dev_request(" ".join(argv[2:])))
+            return 0
+        if command == "dev-agent-apply":
+            if len(argv) < 3:
+                raise DevModeError("Missing dev agent request")
+            print_json(apply_dev_request(" ".join(argv[2:])))
+            return 0
+        if command == "validate-code-scope":
+            if len(argv) < 3:
+                raise DevModeError("Missing path")
+            print_json({"path": argv[2], "allowed": validate_code_scope(argv[2])})
+            return 0
+        if command == "validate-qml-file":
+            if len(argv) < 3:
+                raise DevModeError("Missing QML file path")
+            print_json(validate_qml_file(argv[2]))
+            return 0
+        if command == "run-dev-validation":
+            print_json(run_dev_validation(argv[2:]))
+            return 0
+        if command == "history":
+            print_json(history_list())
+            return 0
+        if command == "restore":
+            if len(argv) < 3:
+                raise DevModeError("Missing change id")
+            print_json(restore_change(argv[2]))
+            return 0
+        if command == "export-patch-bundle":
+            print_json(export_patch_bundle(argv[2] if len(argv) > 2 else None))
+            return 0
+        if command == "commit-message":
+            print_json(create_dev_commit_message_suggestion(argv[2] if len(argv) > 2 else None))
             return 0
         if command == "capture-ui-screenshot":
             print_json(capture_ui_screenshot())

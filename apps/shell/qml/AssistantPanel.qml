@@ -66,6 +66,14 @@ Rectangle {
                 value: root.permissionClient.aiModelProfile.length > 0 ? root.permissionClient.aiModelProfile : "main"
                 tone: "accent"
             }
+
+            StatusChip {
+                visible: root.permissionClient.devModeEnabled
+                compact: true
+                label: "Dev Agent"
+                value: root.permissionClient.devAgentMode.length > 0 ? root.permissionClient.devAgentMode : "disabled"
+                tone: root.permissionClient.devModeEnabled ? "warning" : "neutral"
+            }
         }
 
         RowLayout {
@@ -109,6 +117,11 @@ Rectangle {
                 visible: root.permissionClient.devModeEnabled
                 text: "Compact UI"
                 onClicked: root.permissionClient.askAssistant("Make the buttons smaller")
+            }
+            Button {
+                visible: root.permissionClient.devModeEnabled
+                text: "Add intent"
+                onClicked: root.permissionClient.askAssistant('Add a new intent "Focus Session"')
             }
         }
 
@@ -204,6 +217,18 @@ Rectangle {
                     text: root.permissionClient.aiFallbackReason.length > 0
                         ? root.permissionClient.aiRoutingReason + " Fallback: " + root.permissionClient.aiFallbackReason
                         : root.permissionClient.aiRoutingReason
+                    color: Theme.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                }
+
+                Label {
+                    visible: root.permissionClient.devModeEnabled
+                        && (root.permissionClient.devChangeClass.length > 0 || root.permissionClient.devApplyStrategy.length > 0)
+                    text: "Dev Agent: "
+                        + (root.permissionClient.devChangeClass.length > 0 ? root.permissionClient.devChangeClass : "unclassified")
+                        + " / "
+                        + (root.permissionClient.devApplyStrategy.length > 0 ? root.permissionClient.devApplyStrategy : "pending")
                     color: Theme.textMuted
                     font.pixelSize: 11
                     wrapMode: Text.WordWrap

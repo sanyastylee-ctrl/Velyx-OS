@@ -49,6 +49,14 @@ Rectangle {
 
             StatusChip {
                 compact: true
+                label: "Mode"
+                value: root.permissionClient.devAgentMode.length > 0 ? root.permissionClient.devAgentMode : "disabled"
+                tone: root.permissionClient.devAgentMode === "full_dev" ? "warning"
+                    : (root.permissionClient.devModeEnabled ? "accent" : "neutral")
+            }
+
+            StatusChip {
+                compact: true
                 label: "Overlay"
                 value: root.permissionClient.devModeEnabled ? "Live" : "Disabled"
                 tone: root.permissionClient.devModeEnabled ? "accent" : "neutral"
@@ -78,6 +86,30 @@ Rectangle {
             color: Theme.textSecondary
             wrapMode: Text.WordWrap
             font.pixelSize: 12
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: root.permissionClient.devModeEnabled
+                && (root.permissionClient.devChangeClass.length > 0 || root.permissionClient.devApplyStrategy.length > 0)
+            text: "Change class: "
+                + (root.permissionClient.devChangeClass.length > 0 ? root.permissionClient.devChangeClass : "unknown")
+                + "  |  Apply: "
+                + (root.permissionClient.devApplyStrategy.length > 0 ? root.permissionClient.devApplyStrategy : "pending")
+                + "  |  Scope: "
+                + (root.permissionClient.devScope.length > 0 ? root.permissionClient.devScope : "unspecified")
+            color: Theme.textSecondary
+            wrapMode: Text.WordWrap
+            font.pixelSize: 11
+        }
+
+        Label {
+            Layout.fillWidth: true
+            visible: root.permissionClient.devModeEnabled && root.permissionClient.devApprovalLevel.length > 0
+            text: "Approval: " + root.permissionClient.devApprovalLevel
+            color: Theme.textMuted
+            wrapMode: Text.WordWrap
+            font.pixelSize: 11
         }
 
         Label {

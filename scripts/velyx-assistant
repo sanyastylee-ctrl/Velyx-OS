@@ -344,10 +344,17 @@ class ToolRegistry:
             ("list_rules", "List rules", "productivity", "List automation rules", [], "never"),
             ("show_recovery_status", "Recovery status", "productivity", "Show recovery status", [], "never"),
             ("list_ui_files", "List UI files", "dev", "List editable shell UI files", [], "never"),
+            ("list_system_modules", "List system modules", "dev", "List editable Velyx development modules", [], "never"),
             ("search_ui_component", "Search UI component", "dev", "Search within the live UI scope", [], "never"),
+            ("search_code", "Search code", "dev", "Search development code in allowed scopes", [], "never"),
             ("read_ui_file", "Read UI file", "dev", "Read an editable UI file", [], "never"),
+            ("read_dev_file", "Read dev file", "dev", "Read a dev-scoped file", [], "never"),
             ("preview_ui_diff", "Preview UI diff", "dev", "Preview a live UI change", [], "never"),
             ("patch_ui_file", "Patch UI file", "dev", "Apply a live UI change in the overlay", [], "ask_once"),
+            ("dev_agent_plan", "Dev agent plan", "dev", "Plan a controlled system development change", [], "never"),
+            ("dev_agent_apply", "Dev agent apply", "dev", "Apply a controlled system development change", [], "ask_once"),
+            ("run_dev_validation", "Run dev validation", "dev", "Run validation for dev-scoped files", [], "never"),
+            ("export_patch_bundle", "Export patch bundle", "dev", "Export the latest dev patch bundle", [], "never"),
             ("capture_ui_screenshot", "Capture UI screenshot", "dev", "Capture the current shell UI screenshot", [], "never"),
             ("get_last_screenshot", "Get last screenshot", "dev", "Get the last stored shell screenshot", [], "never"),
             ("compare_screenshots", "Compare screenshots", "dev", "Compare before and after shell screenshots", [], "never"),
@@ -613,6 +620,13 @@ class ToolDispatcher:
             data = json.loads(result.stdout or "{}")
             files = [entry.get("path", "") for entry in data.get("files", [])]
             return {"summary": "\n".join(files[:20]) if files else "No editable UI files found.", "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "list_system_modules":
+            result = self._run("velyx-dev", ["list-system-modules"], timeout=15)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to list system modules")
+            data = json.loads(result.stdout or "{}")
+            modules = [entry.get("path", "") for entry in data.get("modules", [])]
+            return {"summary": "\n".join(modules) if modules else "No development modules found.", "details": json.dumps(data, ensure_ascii=False)}
         if tool_id == "search_ui_component":
             result = self._run("velyx-dev", ["search-ui-component", payload["query"]], timeout=15)
             if result.returncode != 0:
@@ -620,12 +634,25 @@ class ToolDispatcher:
             data = json.loads(result.stdout or "{}")
             rows = [f"{entry.get('path')}:{entry.get('line')} {entry.get('preview')}" for entry in data.get("results", [])[:12]]
             return {"summary": "\n".join(rows) if rows else "No matching UI component found.", "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "search_code":
+            result = self._run("velyx-dev", ["search-code", payload["query"]], timeout=20)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to search code")
+            data = json.loads(result.stdout or "{}")
+            rows = [f"{entry.get('path')}:{entry.get('line')} {entry.get('preview')}" for entry in data.get("results", [])[:16]]
+            return {"summary": "\n".join(rows) if rows else "No matching code found.", "details": json.dumps(data, ensure_ascii=False)}
         if tool_id == "read_ui_file":
             result = self._run("velyx-dev", ["read-ui-file", payload["path"]], timeout=15)
             if result.returncode != 0:
                 raise AssistantError(result.stderr.strip() or "Failed to read UI file")
             data = json.loads(result.stdout or "{}")
             return {"summary": truncate(data.get("content", ""), 700), "details": f"{data.get('path', '')} ({data.get('source', 'base')})"}
+        if tool_id == "read_dev_file":
+            result = self._run("velyx-dev", ["read-dev-file", payload["path"]], timeout=15)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to read dev file")
+            data = json.loads(result.stdout or "{}")
+            return {"summary": truncate(data.get("content", ""), 700), "details": data.get("path", "")}
         if tool_id == "snapshot_ui_state":
             result = self._run("velyx-dev", ["snapshot-ui-state"], timeout=20)
             if result.returncode != 0:
@@ -699,6 +726,41 @@ class ToolDispatcher:
                 "details": json.dumps(data, ensure_ascii=False),
                 "artifacts": [{"type": "ui_change", "value": data.get("files", [])}],
             }
+        if tool_id == "dev_agent_plan":
+            result = self._run("velyx-dev", ["dev-agent-plan", payload["request"]], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to plan the dev change")
+            data = json.loads(result.stdout or "{}")
+            return {
+                "summary": data.get("summary", data.get("reason", "Dev plan prepared.")),
+                "details": json.dumps(data, ensure_ascii=False),
+                "artifacts": [{"type": "dev_plan", "value": data}],
+            }
+        if tool_id == "dev_agent_apply":
+            result = self._run("velyx-dev", ["dev-agent-apply", payload["request"]], timeout=60)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to apply the dev change")
+            data = json.loads(result.stdout or "{}")
+            return {
+                "summary": data.get("summary", "Dev change applied."),
+                "details": json.dumps(data, ensure_ascii=False),
+                "artifacts": [{"type": "dev_change", "value": data}],
+            }
+        if tool_id == "run_dev_validation":
+            result = self._run("velyx-dev", ["run-dev-validation", *payload.get("files", [])], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to run dev validation")
+            data = json.loads(result.stdout or "{}")
+            return {"summary": f"Validation: {data.get('status', 'unknown')}", "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "export_patch_bundle":
+            command = ["export-patch-bundle"]
+            if payload.get("change_id"):
+                command.append(payload["change_id"])
+            result = self._run("velyx-dev", command, timeout=15)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to export patch bundle")
+            data = json.loads(result.stdout or "{}")
+            return {"summary": data.get("summary", "Patch bundle exported."), "details": json.dumps(data, ensure_ascii=False)}
         if tool_id == "restart_shell_dev":
             result = self._run("velyx-dev", ["restart-shell-dev"], timeout=25)
             if result.returncode != 0:
@@ -730,6 +792,7 @@ class RequestParser:
             "wants_recovery": "recovery" in lowered or "восстанов" in lowered,
             "wants_update": "update" in lowered or "обнов" in lowered,
             "wants_ui_edit": any(token in lowered for token in ["кноп", "button", "panel", "панель", "spacing", "spacing", "compact ui", "ui layout", "qml"]),
+            "wants_dev_change": any(token in lowered for token in ["intent", "tool for assistant", "assistant tool", "routing", "model routing", "onboarding", "first boot", "control center", "recovery ux", "installer flow"]),
         }
 
 
@@ -786,12 +849,17 @@ class PlanBuilder:
         if parsed["wants_ui_edit"]:
             steps.append(PlanStep("capture_ui_screenshot", {}, "Capture the current UI before editing"))
             steps.append(PlanStep("snapshot_ui_state", {}, "Capture the current live UI overlay"))
-            steps.append(PlanStep("preview_ui_diff", {"request": query}, "Preview the live UI change"))
-            steps.append(PlanStep("patch_ui_file", {"request": query}, "Apply the live UI change"))
-            steps.append(PlanStep("restart_shell_dev", {}, "Reload the shell to show the UI change"))
+            steps.append(PlanStep("dev_agent_plan", {"request": query}, "Plan the live shell change"))
+            steps.append(PlanStep("preview_ui_diff", {"request": query}, "Preview the live UI diff"))
+            steps.append(PlanStep("dev_agent_apply", {"request": query}, "Apply the live shell change"))
             steps.append(PlanStep("capture_ui_screenshot", {}, "Capture the UI after the live change"))
             steps.append(PlanStep("analyze_ui_screenshot", {"request": query}, "Analyze the visual result and suggest the next refinement"))
             return steps, "Preparing a live shell UI update."
+
+        if parsed["wants_dev_change"]:
+            steps.append(PlanStep("dev_agent_plan", {"request": query}, "Plan the development change"))
+            steps.append(PlanStep("dev_agent_apply", {"request": query}, "Apply the development change with the right strategy"))
+            return steps, "Preparing a controlled system development change."
 
         if parsed["wants_switch_dev"]:
             steps.append(PlanStep("activate_space", {"space_id": "development"}, "Move into development context"))
@@ -861,6 +929,8 @@ class PlanBuilder:
 
     def classify_task_type(self, query: str, steps: list[PlanStep]) -> str:
         lowered = query.lower()
+        if any(step.tool_id in {"dev_agent_plan", "dev_agent_apply"} for step in steps):
+            return "general_assistant"
         if any(step.tool_id in {"preview_ui_diff", "patch_ui_file", "restart_shell_dev"} for step in steps):
             return "general_assistant"
         if any(token in lowered for token in ["compare", "сравни", "architecture", "архитект", "strategy", "стратег", "plan", "спланир", "design", "продумай"]):
