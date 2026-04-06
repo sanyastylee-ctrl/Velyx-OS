@@ -1,7 +1,10 @@
 [Unit]
 Description=Velyx OS Launcher Service
 PartOf=velyx-session.target
-After=graphical-session-pre.target dbus.service
+After=graphical-session-pre.target dbus.service velyx-permissions.service
+Requires=velyx-permissions.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

@@ -25,6 +25,12 @@ echo
 echo "== journald: recovery =="
 journalctl --user -u velyx-recovery.service -n "${LINES}" --no-pager 2>/dev/null || true
 echo
+echo "== journald: shell =="
+journalctl --user -u velyx-shell.service -n "${LINES}" --no-pager 2>/dev/null || true
+echo
+echo "== journald: firstboot-entry =="
+journalctl --user -u velyx-firstboot.service -n "${LINES}" --no-pager 2>/dev/null || true
+echo
 echo "== file logs =="
 for file in \
   "${STATE_DIR}/session_manager_audit.log" \
@@ -54,7 +60,10 @@ for file in \
   "${STATE_DIR}/model_state.json" \
   "${STATE_DIR}/model_registry.json" \
   "${STATE_DIR}/first_boot.log" \
+  "${STATE_DIR}/first_boot.json" \
   "${STATE_DIR}/first_boot_state.json" \
+  "${STATE_DIR}/shell_watchdog.log" \
+  "${STATE_DIR}/shell_state.json" \
   "${STATE_DIR}/installer.log" \
   "${STATE_DIR}/entry.log" \
   "${STATE_DIR}/live_mode.log" \

@@ -2,6 +2,7 @@
 Description=Velyx OS User Session Bootstrap
 After=velyx-session-manager.service dbus.service
 Requires=velyx-session-manager.service
+PartOf=velyx-session.target
 
 [Service]
 Type=oneshot
@@ -13,4 +14,4 @@ ExecStart=/usr/lib/velyx/boot/velyx-user-session-bootstrap %u
 RemainAfterExit=yes
 
 [Install]
-WantedBy=default.target
+WantedBy=velyx-session.target

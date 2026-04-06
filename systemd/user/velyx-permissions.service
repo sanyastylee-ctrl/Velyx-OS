@@ -2,6 +2,8 @@
 Description=Velyx OS Permissions Service
 PartOf=velyx-session.target
 After=graphical-session-pre.target dbus.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

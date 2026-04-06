@@ -1,20 +1,24 @@
 [Unit]
 Description=Velyx OS Shell
 PartOf=velyx-session.target
-After=velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service
-Requires=velyx-permissions.service velyx-launcher.service
+After=velyx-permissions.service velyx-launcher.service velyx-session-manager.service graphical-session-pre.target dbus.service
+Requires=velyx-permissions.service velyx-launcher.service velyx-session-manager.service
 Wants=velyx-settings.service
 After=velyx-settings.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
 EnvironmentFile=-%h/.config/velyx/velyx.env
 Environment=VELYX_USER_ID=%u
 Environment=HOME=%h
+ExecStartPre=/usr/bin/velyx-shell-watchdog prestart
 ExecStartPre=/usr/lib/velyx/boot/velyx-firstboot-dispatch
 ExecStart=/usr/bin/velyx-entry --session
 Restart=always
 RestartSec=1
+ExecStopPost=/usr/bin/velyx-shell-watchdog poststop
 
 [Install]
 WantedBy=velyx-session.target

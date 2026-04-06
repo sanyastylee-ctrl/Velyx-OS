@@ -186,6 +186,7 @@ if [[ "${MODE}" != "units-only" ]]; then
   install_helper_script "${ROOT_DIR}/scripts/velyx-update" "velyx-update"
   install_helper_script "${ROOT_DIR}/scripts/velyx-recovery" "velyx-recovery"
   install_helper_script "${ROOT_DIR}/scripts/velyx-version" "velyx-version"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-shell-watchdog" "velyx-shell-watchdog"
   install_helper_script "${ROOT_DIR}/scripts/velyx-app" "velyx-app"
   install_helper_script "${ROOT_DIR}/scripts/velyx-space" "velyx-space"
   install_helper_script "${ROOT_DIR}/scripts/velyx-intent" "velyx-intent"
@@ -242,9 +243,22 @@ EOF
   done
 
   systemctl --user daemon-reload
-  systemctl --user enable velyx-session-manager.service velyx-session-bootstrap.service
+  systemctl --user enable \
+    velyx-session.target \
+    velyx-settings.service \
+    velyx-permissions.service \
+    velyx-launcher.service \
+    velyx-diagnostics.service \
+    velyx-ai.service \
+    velyx-file.service \
+    velyx-update-engine.service \
+    velyx-recovery.service \
+    velyx-session-manager.service \
+    velyx-session-bootstrap.service \
+    velyx-shell.service
   systemctl --user restart velyx-session-manager.service || true
   systemctl --user restart velyx-session-bootstrap.service || true
+  systemctl --user restart velyx-permissions.service velyx-launcher.service velyx-shell.service || true
 
   install_script_binary "${ROOT_DIR}/scripts/velyx-status" "velyx-status"
   install_script_binary "${ROOT_DIR}/scripts/velyx-restart.sh" "velyx-restart.sh"
@@ -252,6 +266,7 @@ EOF
   install_script_binary "${ROOT_DIR}/scripts/velyx-update" "velyx-update"
   install_script_binary "${ROOT_DIR}/scripts/velyx-recovery" "velyx-recovery"
   install_script_binary "${ROOT_DIR}/scripts/velyx-version" "velyx-version"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-shell-watchdog" "velyx-shell-watchdog"
   install_script_binary "${ROOT_DIR}/scripts/velyx-app" "velyx-app"
   install_script_binary "${ROOT_DIR}/scripts/velyx-space" "velyx-space"
   install_script_binary "${ROOT_DIR}/scripts/velyx-intent" "velyx-intent"

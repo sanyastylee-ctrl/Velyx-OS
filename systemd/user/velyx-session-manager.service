@@ -1,6 +1,10 @@
 [Unit]
 Description=Velyx OS Session Manager
-After=dbus.service
+PartOf=velyx-session.target
+After=dbus.service velyx-permissions.service velyx-launcher.service
+Requires=velyx-permissions.service velyx-launcher.service
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -12,4 +16,4 @@ Restart=always
 RestartSec=1
 
 [Install]
-WantedBy=default.target
+WantedBy=velyx-session.target

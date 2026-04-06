@@ -1,8 +1,10 @@
 [Unit]
 Description=Velyx OS First Boot Entry
 PartOf=velyx-session.target
-After=velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service
-Requires=velyx-permissions.service velyx-launcher.service
+After=velyx-permissions.service velyx-launcher.service velyx-session-manager.service graphical-session-pre.target dbus.service
+Requires=velyx-permissions.service velyx-launcher.service velyx-session-manager.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -12,6 +14,3 @@ Environment=HOME=%h
 ExecStart=/usr/bin/velyx-entry --session
 Restart=always
 RestartSec=1
-
-[Install]
-WantedBy=velyx-session.target

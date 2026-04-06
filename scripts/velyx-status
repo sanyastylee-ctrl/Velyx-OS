@@ -25,6 +25,8 @@ MODEL_STATE_FILE="${STATE_DIR}/model_state.json"
 MODEL_REGISTRY="${STATE_DIR}/model_registry.json"
 NETWORK_STATE_FILE="${STATE_DIR}/network_state.json"
 FIRSTBOOT_STATE="${STATE_DIR}/first_boot_state.json"
+FIRSTBOOT_STATE_CANONICAL="${STATE_DIR}/first_boot.json"
+SHELL_STATE_FILE="${STATE_DIR}/shell_state.json"
 DEV_MODE_STATE="${STATE_DIR}/dev_mode.json"
 DEV_MODE_CONFIG="${STATE_DIR}/dev_mode_config.json"
 DEV_HISTORY="${STATE_DIR}/dev_history.json"
@@ -34,6 +36,12 @@ LIVE_LOG="${STATE_DIR}/live_mode.log"
 unit_state() {
   local unit="$1"
   systemctl --user is-active "${unit}" 2>/dev/null || echo "down"
+}
+
+service_prop() {
+  local unit="$1"
+  local prop="$2"
+  systemctl --user show "${unit}" -p "${prop}" 2>/dev/null | sed -E "s/^${prop}=//" || true
 }
 
 dbus_state() {
@@ -74,6 +82,16 @@ json_bool_string() {
     return 0
   fi
   grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" "${file}" | head -n1 | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || printf 'false\n'
+}
+
+json_number_string() {
+  local key="$1"
+  local file="$2"
+  if [[ ! -f "${file}" ]]; then
+    printf '0\n'
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*[0-9]+" "${file}" | head -n1 | sed -E 's/.*:[[:space:]]*([0-9]+)/\1/' || printf '0\n'
 }
 
 app_count() {
@@ -128,6 +146,10 @@ printf 'launcher: %s (dbus=%s)\n' "$(unit_state velyx-launcher.service)" "$(dbus
 printf 'permissions: %s (dbus=%s)\n' "$(unit_state velyx-permissions.service)" "$(dbus_state com.velyx.Permissions)"
 printf 'session-manager: %s (dbus=%s)\n' "$(unit_state velyx-session-manager.service)" "$(dbus_state com.velyx.SessionManager)"
 printf 'shell: %s\n' "$(unit_state velyx-shell.service)"
+printf 'firstboot-entry: %s\n' "$(unit_state velyx-firstboot.service)"
+printf 'shell-substate: %s\n' "$(service_prop velyx-shell.service SubState)"
+printf 'shell-result: %s\n' "$(service_prop velyx-shell.service Result)"
+printf 'shell-restarts: %s\n' "$(service_prop velyx-shell.service NRestarts)"
 printf 'session-target: %s\n' "$(unit_state velyx-session.target)"
 printf 'update-engine: %s (dbus=%s)\n' "$(unit_state velyx-update-engine.service)" "$(dbus_state com.velyx.UpdateEngine)"
 printf 'recovery: %s (dbus=%s)\n' "$(unit_state velyx-recovery.service)" "$(dbus_state com.velyx.Recovery)"
@@ -154,7 +176,9 @@ printf 'dev-history: %s (entries=%s)\n' "${DEV_HISTORY}" "$( [[ -f "${DEV_HISTOR
 printf 'model-config: %s (mode=%s small=%s main=%s heavy=%s)\n' "${MODEL_CONFIG}" "$(intent_state_string selection_mode "${MODEL_CONFIG}")" "$(intent_state_string default_small_model "${MODEL_CONFIG}")" "$(intent_state_string default_main_model "${MODEL_CONFIG}")" "$(intent_state_string default_heavy_model "${MODEL_CONFIG}")"
 printf 'model-state: %s (active=%s profile=%s backend=%s available=%s)\n' "${MODEL_STATE_FILE}" "$(intent_state_string active_model "${MODEL_STATE_FILE}")" "$(intent_state_string active_profile "${MODEL_STATE_FILE}")" "$(intent_state_string backend_status "${MODEL_STATE_FILE}")" "$(json_bool_string model_available "${MODEL_STATE_FILE}")"
 printf 'model-registry: %s (count=%s)\n' "${MODEL_REGISTRY}" "$( [[ -f "${MODEL_REGISTRY}" ]] && grep -o '"model_id"' "${MODEL_REGISTRY}" | wc -l | awk '{print $1}' || printf '0' )"
-printf 'first-boot: %s (required=%s step=%s ready=%s)\n' "${FIRSTBOOT_STATE}" "$(json_bool_string first_boot_required "${FIRSTBOOT_STATE}")" "$(intent_state_string current_step "${FIRSTBOOT_STATE}")" "$(json_bool_string system_ready "${FIRSTBOOT_STATE}")"
+printf 'first-boot: %s (completed=%s step=%s)\n' "${FIRSTBOOT_STATE_CANONICAL}" "$(json_bool_string completed "${FIRSTBOOT_STATE_CANONICAL}")" "$(intent_state_string step "${FIRSTBOOT_STATE_CANONICAL}")"
+printf 'first-boot-compat: %s (required=%s step=%s ready=%s)\n' "${FIRSTBOOT_STATE}" "$(json_bool_string first_boot_required "${FIRSTBOOT_STATE}")" "$(intent_state_string current_step "${FIRSTBOOT_STATE}")" "$(json_bool_string system_ready "${FIRSTBOOT_STATE}")"
+printf 'shell-state: %s (result=%s recent-failures=%s recovery=%s)\n' "${SHELL_STATE_FILE}" "$(intent_state_string last_result "${SHELL_STATE_FILE}")" "$(json_number_string recent_failure_count "${SHELL_STATE_FILE}")" "$(json_bool_string recovery_suggested "${SHELL_STATE_FILE}")"
 printf 'entry-log: %s (%s)\n' "${ENTRY_LOG}" "$( [[ -f "${ENTRY_LOG}" ]] && echo present || echo missing )"
 printf 'live-log: %s (%s)\n' "${LIVE_LOG}" "$( [[ -f "${LIVE_LOG}" ]] && echo present || echo missing )"
 printf 'xprop: %s\n' "$(command -v xprop >/dev/null 2>&1 && echo available || echo missing)"

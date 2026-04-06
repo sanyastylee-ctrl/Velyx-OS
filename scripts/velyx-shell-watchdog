@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any
+
+
+def now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def now_iso() -> str:
+    return now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR", str(Path.home() / ".velyx")))
+STATE_FILE = STATE_DIR / "shell_state.json"
+UPDATE_STATE_FILE = STATE_DIR / "update_state.json"
+LOG_FILE = STATE_DIR / "shell_watchdog.log"
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def write_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def log_event(event: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with LOG_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} {detail}\n")
+
+
+def base_state() -> dict[str, Any]:
+    return {
+        "last_start_at": "",
+        "last_stop_at": "",
+        "last_result": "unknown",
+        "last_exit_code": "",
+        "last_exit_status": "",
+        "last_failure_reason": "",
+        "recent_failures": [],
+        "recent_failure_count": 0,
+        "restart_attempts_observed": 0,
+        "recovery_suggested": False,
+    }
+
+
+def prune_failures(items: list[str]) -> list[str]:
+    threshold = now() - timedelta(minutes=10)
+    kept: list[str] = []
+    for item in items:
+        try:
+            parsed = datetime.fromisoformat(item.replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if parsed >= threshold:
+            kept.append(item)
+    return kept
+
+
+def update_recovery_flag() -> None:
+    payload = read_json(UPDATE_STATE_FILE, {})
+    if not payload:
+        return
+    payload["recovery_needed"] = True
+    payload["last_update_result"] = payload.get("last_update_result") or "shell_recovery_suggested"
+    payload["last_recovery_result"] = "shell_failure_detected"
+    write_json(UPDATE_STATE_FILE, payload)
+
+
+def prestart() -> int:
+    state = read_json(STATE_FILE, base_state())
+    state["last_start_at"] = now_iso()
+    write_json(STATE_FILE, state)
+    log_event("shell_prestart")
+    return 0
+
+
+def poststop() -> int:
+    state = read_json(STATE_FILE, base_state())
+    service_result = os.environ.get("SERVICE_RESULT", "unknown")
+    exit_code = os.environ.get("EXIT_CODE", "")
+    exit_status = os.environ.get("EXIT_STATUS", "")
+
+    state["last_stop_at"] = now_iso()
+    state["last_result"] = service_result
+    state["last_exit_code"] = exit_code
+    state["last_exit_status"] = exit_status
+
+    failures = prune_failures(list(state.get("recent_failures", [])))
+    failed = service_result not in {"success", "clean-exit"}
+    if failed:
+        failures.append(now_iso())
+        state["last_failure_reason"] = service_result
+        state["restart_attempts_observed"] = int(state.get("restart_attempts_observed", 0)) + 1
+    else:
+        state["last_failure_reason"] = ""
+
+    state["recent_failures"] = failures
+    state["recent_failure_count"] = len(failures)
+    if len(failures) >= 3:
+        state["recovery_suggested"] = True
+        update_recovery_flag()
+    write_json(STATE_FILE, state)
+    log_event(
+        "shell_poststop",
+        f"result={service_result} exit_code={exit_code} exit_status={exit_status} failures={len(failures)}",
+    )
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        print("usage: velyx-shell-watchdog prestart|poststop", file=sys.stderr)
+        return 1
+    command = sys.argv[1]
+    if command == "prestart":
+        return prestart()
+    if command == "poststop":
+        return poststop()
+    print("usage: velyx-shell-watchdog prestart|poststop", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
