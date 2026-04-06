@@ -100,8 +100,10 @@ def run_install_backend(action: str) -> dict[str, Any]:
 
 def interactive_flow() -> dict[str, Any]:
     checks = system_check()
-    print("Velyx OS Preview Installer")
-    print("==========================")
+    print("Velyx Installer")
+    print("================")
+    print("Velyx OS Preview")
+    print("")
     print("1. Install Velyx")
     print("2. Repair Existing Install")
     print("3. Try / Diagnostics")
@@ -193,7 +195,7 @@ def main() -> int:
             "summary": "Velyx Installer finished." if result["ok"] else "Velyx Installer failed.",
             "installer": payload,
             "backend_result": result,
-            "next_step": "Reboot into Velyx First Boot." if result["ok"] else "Open diagnostics or repair.",
+            "next_step": "Continue into Velyx First Boot, then Velyx Shell." if result["ok"] else "Open diagnostics or repair.",
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0 if result["ok"] else 1

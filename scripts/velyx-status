@@ -27,6 +27,8 @@ FIRSTBOOT_STATE="${STATE_DIR}/first_boot_state.json"
 DEV_MODE_STATE="${STATE_DIR}/dev_mode.json"
 DEV_MODE_CONFIG="${STATE_DIR}/dev_mode_config.json"
 DEV_HISTORY="${STATE_DIR}/dev_history.json"
+ENTRY_LOG="${STATE_DIR}/entry.log"
+LIVE_LOG="${STATE_DIR}/live_mode.log"
 
 unit_state() {
   local unit="$1"
@@ -151,6 +153,8 @@ printf 'model-config: %s (mode=%s small=%s main=%s heavy=%s)\n' "${MODEL_CONFIG}
 printf 'model-state: %s (active=%s profile=%s backend=%s available=%s)\n' "${MODEL_STATE_FILE}" "$(intent_state_string active_model "${MODEL_STATE_FILE}")" "$(intent_state_string active_profile "${MODEL_STATE_FILE}")" "$(intent_state_string backend_status "${MODEL_STATE_FILE}")" "$(json_bool_string model_available "${MODEL_STATE_FILE}")"
 printf 'model-registry: %s (count=%s)\n' "${MODEL_REGISTRY}" "$( [[ -f "${MODEL_REGISTRY}" ]] && grep -o '"model_id"' "${MODEL_REGISTRY}" | wc -l | awk '{print $1}' || printf '0' )"
 printf 'first-boot: %s (required=%s step=%s ready=%s)\n' "${FIRSTBOOT_STATE}" "$(json_bool_string first_boot_required "${FIRSTBOOT_STATE}")" "$(intent_state_string current_step "${FIRSTBOOT_STATE}")" "$(json_bool_string system_ready "${FIRSTBOOT_STATE}")"
+printf 'entry-log: %s (%s)\n' "${ENTRY_LOG}" "$( [[ -f "${ENTRY_LOG}" ]] && echo present || echo missing )"
+printf 'live-log: %s (%s)\n' "${LIVE_LOG}" "$( [[ -f "${LIVE_LOG}" ]] && echo present || echo missing )"
 printf 'xprop: %s\n' "$(command -v xprop >/dev/null 2>&1 && echo available || echo missing)"
 printf 'wmctrl: %s\n' "$(command -v wmctrl >/dev/null 2>&1 && echo available || echo missing)"
 printf 'xdotool: %s\n' "$(command -v xdotool >/dev/null 2>&1 && echo available || echo missing)"

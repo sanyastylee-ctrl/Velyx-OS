@@ -56,6 +56,8 @@ for file in \
   "${STATE_DIR}/first_boot.log" \
   "${STATE_DIR}/first_boot_state.json" \
   "${STATE_DIR}/installer.log" \
+  "${STATE_DIR}/entry.log" \
+  "${STATE_DIR}/live_mode.log" \
   "${STATE_DIR}/diagnostics.log" \
   "${STATE_DIR}/assistant.log" \
   "${STATE_DIR}/assistant_config.json" \

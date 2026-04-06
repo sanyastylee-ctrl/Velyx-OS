@@ -195,6 +195,8 @@ if [[ "${MODE}" != "units-only" ]]; then
   install_helper_script "${ROOT_DIR}/scripts/velyx-model" "velyx-model"
   install_helper_script "${ROOT_DIR}/scripts/velyx-assistant" "velyx-assistant"
   install_helper_script "${ROOT_DIR}/scripts/velyx-dev" "velyx-dev"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-live" "velyx-live"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-entry" "velyx-entry"
   install_helper_script "${ROOT_DIR}/scripts/velyx-firstboot" "velyx-firstboot"
   install_helper_script "${ROOT_DIR}/scripts/velyx-installer" "velyx-installer"
   install_helper_script "${ROOT_DIR}/scripts/velyx-diagnostics" "velyx-diagnostics"

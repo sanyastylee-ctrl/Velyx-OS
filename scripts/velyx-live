@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict[str, str]:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV = load_env_file()
+ROOT = Path(__file__).resolve().parent.parent
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+LIVE_ROOT = STATE_DIR / "live_sessions"
+LIVE_LOG = STATE_DIR / "live_mode.log"
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with LIVE_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def print_json(payload: dict) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def shell_binary() -> str:
+    return (
+        os.environ.get("VELYX_SHELL_BINARY")
+        or ENV.get("VELYX_SHELL_BINARY")
+        or shutil.which("velyx-shell")
+        or str((Path(os.environ.get("VELYX_INSTALL_PREFIX") or ENV.get("VELYX_INSTALL_PREFIX") or (Path.home() / ".local/share/velyx")) / "bin" / "velyx-shell"))
+    )
+
+
+def prepare_live_state(live_state: Path) -> dict:
+    live_state.mkdir(parents=True, exist_ok=True)
+    firstboot = shutil.which("velyx-firstboot") or str(ROOT / "scripts" / "velyx-firstboot")
+    env = os.environ.copy()
+    env["VELYX_STATE_DIR"] = str(live_state)
+    subprocess.run(
+        [
+            sys.executable,
+            str(firstboot),
+            "prepare",
+            "--force",
+            "--action",
+            "live",
+            "--install-mode",
+            "preview_live",
+            "--ai-mode",
+            "off",
+            "--model-selection",
+            "auto_hardware",
+            "--backend",
+            "stub",
+            "--default-space",
+            "general",
+            "--predictive-mode",
+            "off",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        env=env,
+    )
+    return {
+        "state_dir": str(live_state),
+        "session_id": live_state.name,
+    }
+
+
+def main() -> int:
+    session_id = f"live-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    live_state = LIVE_ROOT / session_id
+    session = prepare_live_state(live_state)
+    binary = shell_binary()
+    if not Path(binary).exists() and not shutil.which(binary):
+        log_event("live_launch", "failed", "shell_unavailable")
+        print_json(
+            {
+                "status": "failed",
+                "summary": "Velyx Live could not find the shell binary.",
+                "session": session,
+                "next_step": "Install or build Velyx Shell first.",
+            }
+        )
+        return 1
+
+    env = os.environ.copy()
+    env["VELYX_STATE_DIR"] = str(live_state)
+    env["VELYX_LIVE_MODE"] = "1"
+    env["VELYX_PRODUCT_ENTRY"] = "velyx-live"
+    log_event("live_launch", "started", f"session={session_id}")
+
+    try:
+        result = subprocess.run([binary], env=env, timeout=20, check=False)
+        status = "ok" if result.returncode == 0 else "degraded"
+        log_event("live_launch", status, f"session={session_id} exit={result.returncode}")
+        print_json(
+            {
+                "status": status,
+                "summary": "Velyx Live launched the shell preview." if result.returncode == 0 else "Velyx Live asked the shell to start, but it did not exit cleanly here.",
+                "session": session,
+                "shell_binary": binary,
+                "exit_code": result.returncode,
+            }
+        )
+        return 0 if result.returncode == 0 else 1
+    except Exception as exc:
+        log_event("live_launch", "failed", str(exc))
+        print_json(
+            {
+                "status": "failed",
+                "summary": "Velyx Live could not start the shell in this environment.",
+                "session": session,
+                "shell_binary": binary,
+                "error": str(exc),
+            }
+        )
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

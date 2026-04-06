@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict[str, str]:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV = load_env_file()
+ROOT = Path(__file__).resolve().parent.parent
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+ENTRY_LOG = STATE_DIR / "entry.log"
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with ENTRY_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def print_json(payload: Any) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def tool_path(name: str) -> list[str]:
+    tool = shutil.which(name)
+    if tool:
+        return [tool]
+    local = ROOT / "scripts" / name
+    if local.exists():
+        return [sys.executable, str(local)]
+    raise RuntimeError(f"{name} is not available")
+
+
+def run_tool(name: str, args: list[str], timeout: int = 240) -> dict[str, Any]:
+    command = [*tool_path(name), *args]
+    result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+    output = result.stdout.strip()
+    payload: dict[str, Any]
+    if output.startswith("{"):
+        try:
+            payload = json.loads(output)
+        except Exception:
+            payload = {"raw_output": output}
+    else:
+        payload = {"raw_output": output}
+    payload["exit_code"] = result.returncode
+    payload["stderr"] = result.stderr.strip()
+    return payload
+
+
+def run_install() -> dict[str, Any]:
+    return run_tool("velyx-installer", [])
+
+
+def run_repair() -> dict[str, Any]:
+    return run_tool("velyx-installer", ["--non-interactive", "--action", "repair"])
+
+
+def run_diagnostics() -> dict[str, Any]:
+    return run_tool("velyx-installer", ["--non-interactive", "--action", "diagnostics"])
+
+
+def run_live() -> dict[str, Any]:
+    return run_tool("velyx-live", [], timeout=60)
+
+
+def interactive() -> dict[str, Any]:
+    print("Velyx OS")
+    print("========")
+    print("1. Install Velyx")
+    print("2. Try Velyx (Live / Preview)")
+    print("3. Repair / Diagnostics")
+    choice = input("Choose 1, 2, or 3 [1]: ").strip() or "1"
+    if choice == "2":
+        return {"action": "live"}
+    if choice == "3":
+        sub = input("Type 'repair' or 'diagnostics' [diagnostics]: ").strip().lower() or "diagnostics"
+        return {"action": "repair" if sub == "repair" else "diagnostics"}
+    return {"action": "install"}
+
+
+def noninteractive(args: list[str]) -> dict[str, str]:
+    action = "install"
+    if "--action" in args:
+        index = args.index("--action")
+        if index + 1 >= len(args):
+            raise RuntimeError("Missing action value")
+        action = args[index + 1]
+    return {"action": action}
+
+
+def main() -> int:
+    try:
+        payload = interactive() if "--non-interactive" not in sys.argv else noninteractive(sys.argv[1:])
+        action = payload["action"]
+        log_event("entry_begin", "started", f"action={action}")
+        if action == "install":
+            result = run_install()
+        elif action == "live":
+            result = run_live()
+        elif action == "repair":
+            result = run_repair()
+        elif action == "diagnostics":
+            result = run_diagnostics()
+        else:
+            raise RuntimeError(f"Unsupported action: {action}")
+        status = "ok" if result.get("exit_code", 1) == 0 else "failed"
+        log_event("entry_complete", status, f"action={action}")
+        print_json(
+            {
+                "status": status,
+                "summary": {
+                    "install": "Velyx Installer finished.",
+                    "live": "Velyx Live path completed.",
+                    "repair": "Velyx repair path finished.",
+                    "diagnostics": "Velyx diagnostics are ready.",
+                }.get(action, "Velyx entry finished."),
+                "entry_action": action,
+                "result": result,
+                "next_step": {
+                    "install": "Continue into Velyx First Boot, then Velyx Shell.",
+                    "live": "You are in Velyx Live preview mode.",
+                    "repair": "Return to Velyx Entry or continue with Velyx Recovery.",
+                    "diagnostics": "Review diagnostics or continue into install/repair.",
+                }.get(action, "Continue with Velyx."),
+            }
+        )
+        return 0 if status == "ok" else 1
+    except Exception as exc:
+        log_event("entry_failed", "failed", str(exc))
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
