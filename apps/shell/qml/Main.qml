@@ -491,41 +491,50 @@ ApplicationWindow {
                     }
                 }
 
-                ColumnLayout {
+                ScrollView {
                     Layout.preferredWidth: 390
                     Layout.fillHeight: true
-                    spacing: Theme.space4
+                    clip: true
 
-                    AssistantPanel {
-                        Layout.fillWidth: true
-                        permissionClient: permissionClient
-                    }
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: Theme.space4
 
-                    DevModePanel {
-                        Layout.fillWidth: true
-                        visible: permissionClient.devModeEnabled
-                        permissionClient: permissionClient
-                    }
+                        ControlCenterPanel {
+                            Layout.fillWidth: true
+                            permissionClient: permissionClient
+                        }
 
-                    AiSuggestionPanel {
-                        Layout.fillWidth: true
-                        permissionClient: permissionClient
-                    }
+                        AssistantPanel {
+                            Layout.fillWidth: true
+                            permissionClient: permissionClient
+                        }
 
-                    DetailsPanel {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        permissionClient: permissionClient
-                    }
+                        DevModePanel {
+                            Layout.fillWidth: true
+                            visible: permissionClient.devModeEnabled
+                            permissionClient: permissionClient
+                        }
 
-                    AutomationPanel {
-                        Layout.fillWidth: true
-                        permissionClient: permissionClient
-                    }
+                        AiSuggestionPanel {
+                            Layout.fillWidth: true
+                            permissionClient: permissionClient
+                        }
 
-                    DiagnosticsPanel {
-                        Layout.fillWidth: true
-                        permissionClient: permissionClient
+                        DetailsPanel {
+                            Layout.fillWidth: true
+                            permissionClient: permissionClient
+                        }
+
+                        AutomationPanel {
+                            Layout.fillWidth: true
+                            permissionClient: permissionClient
+                        }
+
+                        DiagnosticsPanel {
+                            Layout.fillWidth: true
+                            permissionClient: permissionClient
+                        }
                     }
                 }
             }

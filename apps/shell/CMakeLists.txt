@@ -24,6 +24,7 @@ qt_add_qml_module(velyx-shell
         qml/IntentCard.qml
         qml/AgentPanel.qml
         qml/AutomationPanel.qml
+        qml/ControlCenterPanel.qml
         qml/AppCard.qml
         qml/SystemStatusPanel.qml
         qml/SpaceOverviewPanel.qml

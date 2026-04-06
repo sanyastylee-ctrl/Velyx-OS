@@ -76,6 +76,7 @@ QString extractWindowId(const QString &raw)
 
 PermissionClient::PermissionClient(QObject *parent)
     : QObject(parent)
+    , m_runtimeStartedAt(QDateTime::currentDateTimeUtc())
 {
 }
 
@@ -202,6 +203,26 @@ QString PermissionClient::sessionState() const
 QString PermissionClient::sessionHealth() const
 {
     return m_sessionHealth;
+}
+
+QString PermissionClient::runtimeUptime() const
+{
+    if (!m_runtimeStartedAt.isValid()) {
+        return "unknown";
+    }
+
+    const qint64 elapsedSeconds = m_runtimeStartedAt.secsTo(QDateTime::currentDateTimeUtc());
+    const qint64 hours = elapsedSeconds / 3600;
+    const qint64 minutes = (elapsedSeconds % 3600) / 60;
+    const qint64 seconds = elapsedSeconds % 60;
+
+    if (hours > 0) {
+        return QString("%1h %2m").arg(hours).arg(minutes);
+    }
+    if (minutes > 0) {
+        return QString("%1m %2s").arg(minutes).arg(seconds);
+    }
+    return QString("%1s").arg(seconds);
 }
 
 QString PermissionClient::currentVersion() const
@@ -1966,6 +1987,33 @@ void PermissionClient::setModelSelectionMode(const QString &mode)
     updateStatusDetails("model_selection_mode", "failed", trimmed, "retry");
 }
 
+void PermissionClient::setCurrentModel(const QString &modelId)
+{
+    const QString trimmed = modelId.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-model", {"use", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(8000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? QString("Current model set to %1").arg(trimmed) : output);
+            updateStatusDetails("model_use", "ok", trimmed, "observe_runtime");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? QString("Failed to switch to model %1").arg(trimmed) : errorOutput);
+        updateStatusDetails("model_use", "failed", trimmed, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Model runtime unavailable");
+    updateStatusDetails("model_use", "failed", trimmed, "retry");
+}
+
 void PermissionClient::detectModelHardware()
 {
     QProcess process;
@@ -1986,6 +2034,46 @@ void PermissionClient::detectModelHardware()
 
     updateLaunchState("error", "Model hardware detection unavailable");
     updateStatusDetails("model_detect_hardware", "failed", "detect", "retry");
+}
+
+void PermissionClient::checkUpdateSource(const QString &source)
+{
+    refreshRuntimeStatus();
+    const QString trimmed = source.trimmed();
+    const QString message = trimmed.isEmpty()
+        ? "Update state refreshed. Local Velyx Update path is ready."
+        : QString("Update source recorded: %1").arg(trimmed);
+    updateLaunchState("ok", message);
+    updateStatusDetails("update_check", "ok", trimmed.isEmpty() ? "local" : trimmed, "apply_update");
+}
+
+void PermissionClient::runSystemUpdate(const QString &source)
+{
+    QStringList arguments;
+    const QString trimmed = source.trimmed();
+    if (!trimmed.isEmpty()) {
+        arguments << "--source" << trimmed;
+    }
+
+    QProcess process;
+    process.start("velyx-update", arguments);
+    if (process.waitForStarted(400) && process.waitForFinished(120000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshRuntimeStatus();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Velyx Update completed" : output);
+            updateStatusDetails("update_apply", "ok", trimmed.isEmpty() ? "local" : trimmed, "review_runtime");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Velyx Update failed" : errorOutput);
+        updateStatusDetails("update_apply", "failed", trimmed.isEmpty() ? "local" : trimmed, "recovery");
+        return;
+    }
+
+    updateLaunchState("error", "Velyx Update is unavailable");
+    updateStatusDetails("update_apply", "failed", trimmed.isEmpty() ? "local" : trimmed, "retry");
 }
 
 void PermissionClient::setFirstBootAiMode(const QString &mode)

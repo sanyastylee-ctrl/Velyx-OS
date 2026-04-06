@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QObject>
+#include <QDateTime>
 #include <QHash>
 #include <QString>
 #include <QStringList>
@@ -35,6 +36,7 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString sessionAvailability READ sessionAvailability NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString sessionState READ sessionState NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString sessionHealth READ sessionHealth NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString runtimeUptime READ runtimeUptime NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString currentVersion READ currentVersion NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString updateState READ updateState NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString lastUpdateResult READ lastUpdateResult NOTIFY runtimeStatusChanged)
@@ -146,7 +148,10 @@ public:
     Q_INVOKABLE void dismissAiSuggestion();
     Q_INVOKABLE void blockAiSuggestion();
     Q_INVOKABLE void setModelSelectionMode(const QString &mode);
+    Q_INVOKABLE void setCurrentModel(const QString &modelId);
     Q_INVOKABLE void detectModelHardware();
+    Q_INVOKABLE void checkUpdateSource(const QString &source);
+    Q_INVOKABLE void runSystemUpdate(const QString &source);
     Q_INVOKABLE void setFirstBootAiMode(const QString &mode);
     Q_INVOKABLE void setFirstBootStep(const QString &step);
     Q_INVOKABLE void setFirstBootModelSelectionMode(const QString &mode);
@@ -193,6 +198,7 @@ public:
     QString sessionAvailability() const;
     QString sessionState() const;
     QString sessionHealth() const;
+    QString runtimeUptime() const;
     QString currentVersion() const;
     QString updateState() const;
     QString lastUpdateResult() const;
@@ -337,6 +343,7 @@ private:
     QString m_sessionAvailability {"unknown"};
     QString m_sessionState {"unknown"};
     QString m_sessionHealth {"unknown"};
+    QDateTime m_runtimeStartedAt;
     QString m_currentVersion;
     QString m_updateState {"unknown"};
     QString m_lastUpdateResult;
