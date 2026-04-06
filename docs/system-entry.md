@@ -24,7 +24,7 @@ This opens the primary preview flow and routes into one of three paths:
 
 ## Install path
 
-`velyx-entry -> velyx-installer -> velyx-firstboot -> Velyx Shell`
+`velyx-entry -> velyx-installer -> reboot -> Velyx First Boot -> Velyx Shell`
 
 The installer is responsible for:
 - system check
@@ -37,7 +37,7 @@ The installer remains backed by the existing install pipeline, but the user-faci
 
 ## Live path
 
-`velyx-entry -> velyx-live -> Velyx Shell`
+`velyx-entry -> velyx-live -> Velyx First Boot -> Velyx Shell`
 
 `velyx-live`:
 - does not install Velyx
@@ -79,6 +79,21 @@ User-facing naming should stay consistent:
 - `channel`
 - `version`
 - `build_id`
+
+## Session routing
+
+For an installed system, session startup uses:
+
+```bash
+velyx-entry --session
+```
+
+That route checks `~/.velyx/first_boot.json`:
+
+- `completed=false` -> launch `Velyx Shell` with `Velyx First Boot`
+- `completed=true` -> launch normal `Velyx Shell`
+
+This keeps the user inside Velyx instead of dropping them into a generic desktop path after reboot.
 
 ## Intended session flow
 

@@ -1,17 +1,14 @@
 [Unit]
-Description=Velyx OS Shell
+Description=Velyx OS First Boot Entry
 PartOf=velyx-session.target
 After=velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service
 Requires=velyx-permissions.service velyx-launcher.service
-Wants=velyx-settings.service
-After=velyx-settings.service
 
 [Service]
 Type=simple
 EnvironmentFile=-%h/.config/velyx/velyx.env
 Environment=VELYX_USER_ID=%u
 Environment=HOME=%h
-ExecStartPre=/usr/lib/velyx/boot/velyx-firstboot-dispatch
 ExecStart=/usr/bin/velyx-entry --session
 Restart=always
 RestartSec=1

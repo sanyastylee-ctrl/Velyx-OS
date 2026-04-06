@@ -13,10 +13,12 @@ LOG_FILE="${STATE_DIR}/first_boot.log"
 mkdir -p "${STATE_DIR}"
 
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-firstboot" ]]; then
-  "${PREFIX}/bin/velyx-firstboot" status >/dev/null || true
+  "${PREFIX}/bin/velyx-firstboot" start >/dev/null || true
 fi
 
-if [[ -f "${STATE_DIR}/first_boot_state.json" ]]; then
+if [[ -f "${STATE_DIR}/first_boot.json" ]]; then
+  echo "$(date -Iseconds) first_boot_json=present user=${USER:-unknown}" >> "${LOG_FILE}"
+elif [[ -f "${STATE_DIR}/first_boot_state.json" ]]; then
   echo "$(date -Iseconds) first_boot_state=present user=${USER:-unknown}" >> "${LOG_FILE}"
 else
   echo "$(date -Iseconds) first_boot_state=missing user=${USER:-unknown}" >> "${LOG_FILE}"

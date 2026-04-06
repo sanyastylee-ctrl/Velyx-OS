@@ -163,6 +163,7 @@ public:
     Q_INVOKABLE void setFirstBootPredictiveMode(const QString &mode);
     Q_INVOKABLE void rerunFirstBootChecks();
     Q_INVOKABLE void completeFirstBoot();
+    Q_INVOKABLE void completeFirstBootSetup(const QString &username, const QString &aiMode);
     Q_INVOKABLE void runRecoveryFlow();
     Q_INVOKABLE void exportDiagnostics();
     Q_INVOKABLE void askAssistant(const QString &query);

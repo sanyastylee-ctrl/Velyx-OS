@@ -30,14 +30,16 @@ def load_env_file() -> dict[str, str]:
 
 ENV = load_env_file()
 STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
-FIRSTBOOT_STATE = STATE_DIR / "first_boot_state.json"
+FIRST_BOOT_FILE = STATE_DIR / "first_boot.json"
+COMPAT_STATE_FILE = STATE_DIR / "first_boot_state.json"
 FIRSTBOOT_LOG = STATE_DIR / "first_boot.log"
 INSTALL_HANDOFF = STATE_DIR / "install_handoff.json"
 AI_CONFIG = STATE_DIR / "ai_config.json"
+ASSISTANT_CONFIG = STATE_DIR / "assistant_config.json"
 MODEL_CONFIG = STATE_DIR / "model_config.json"
 MODEL_STATE = STATE_DIR / "model_state.json"
 UPDATE_STATE = STATE_DIR / "update_state.json"
-SPACES_REGISTRY = Path(ENV.get("VELYX_SPACES_REGISTRY") or (STATE_DIR / "spaces_registry.json"))
+NETWORK_STATE = STATE_DIR / "network_state.json"
 INSTALL_PREFIX = Path(os.environ.get("VELYX_INSTALL_PREFIX") or ENV.get("VELYX_INSTALL_PREFIX") or (Path.home() / ".local/share/velyx"))
 VERSION_FILE = INSTALL_PREFIX / "share" / "version.txt"
 
@@ -55,7 +57,12 @@ def save_json(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{uuid.uuid4().hex}.tmp")
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+    try:
+        tmp.replace(path)
+    except PermissionError:
+        if path.exists():
+            path.unlink()
+        tmp.replace(path)
 
 
 def log_event(event: str, status: str, detail: str = "") -> None:
@@ -64,37 +71,26 @@ def log_event(event: str, status: str, detail: str = "") -> None:
         fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
 
 
+def print_json(payload: Any) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
 def version_info() -> dict[str, str]:
-    payload = {"product": "Velyx OS Preview", "channel": "preview", "version": "unknown", "build_id": "unknown"}
+    payload = {"product": "Velyx OS", "channel": "preview", "version": "unknown", "build_id": "unknown"}
     if VERSION_FILE.exists():
         for line in VERSION_FILE.read_text(encoding="utf-8").splitlines():
             if "=" not in line:
                 continue
             key, value = line.split("=", 1)
             payload[key.strip()] = value.strip()
-    payload["build_id"] = payload.get("version", payload.get("build_id", "unknown"))
+    payload["build_id"] = payload.get("build_id") or payload.get("version", "unknown")
     return payload
-
-
-def network_state() -> str:
-    try:
-        socket.create_connection(("1.1.1.1", 53), timeout=1.5).close()
-        return "available"
-    except OSError:
-        return "offline"
 
 
 def service_state(unit: str) -> str:
     try:
-        result = subprocess.run(
-            ["systemctl", "--user", "is-active", unit],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-        )
-        value = (result.stdout or result.stderr).strip()
-        return value or "unknown"
+        result = subprocess.run(["systemctl", "--user", "is-active", unit], capture_output=True, text=True, timeout=2, check=False)
+        return (result.stdout or result.stderr).strip() or "unknown"
     except Exception:
         return "unknown"
 
@@ -112,171 +108,238 @@ def current_runtime_health() -> tuple[bool, str]:
     return False, "degraded"
 
 
+def network_state() -> str:
+    data = read_json(NETWORK_STATE, {})
+    if data:
+        return data.get("state", "unknown")
+    try:
+        socket.create_connection(("1.1.1.1", 53), timeout=1.5).close()
+        return "online"
+    except OSError:
+        return "offline"
+
+
 def model_status() -> str:
     state = read_json(MODEL_STATE, {})
     if state.get("model_available") is True:
         return "ready"
-    if state.get("last_route") or state.get("active_model"):
+    if state:
         return "degraded"
     return "unavailable"
 
 
-def active_space() -> str:
-    registry = read_json(SPACES_REGISTRY, {})
-    return registry.get("active_space_id", "general") or "general"
+def normalize_ai_mode(value: str | None) -> str | None:
+    if value is None:
+        return None
+    lowered = value.strip().lower().replace(" ", "_")
+    if lowered in {"local", "offline", "suggest", "off"}:
+        return "local"
+    if lowered in {"hybrid", "auto", "online"}:
+        return "hybrid"
+    return "local"
+
+
+def apply_ai_mode(ai_mode: str | None) -> None:
+    normalized = normalize_ai_mode(ai_mode)
+    ai = read_json(AI_CONFIG, {})
+    assistant = read_json(ASSISTANT_CONFIG, {})
+    if normalized == "hybrid":
+        ai["enabled"] = True
+        ai["mode"] = "suggest"
+        assistant["mode"] = "suggest"
+        assistant["network_access"] = "ask"
+    else:
+        ai["enabled"] = True
+        ai["mode"] = "suggest"
+        assistant["mode"] = "suggest"
+        assistant["network_access"] = "off"
+    save_json(AI_CONFIG, ai)
+    save_json(ASSISTANT_CONFIG, assistant)
+
+
+def build_defaults() -> dict[str, Any]:
+    payload = read_json(FIRST_BOOT_FILE, {})
+    handoff = read_json(INSTALL_HANDOFF, {})
+    info = version_info()
+    state = {
+        "completed": payload.get("completed", False),
+        "step": payload.get("step", "welcome"),
+        "ai_mode": payload.get("ai_mode"),
+        "username": payload.get("username"),
+        "version": info.get("version", "unknown"),
+        "product": info.get("product", "Velyx OS"),
+        "channel": info.get("channel", "preview"),
+        "build_id": info.get("build_id", "unknown"),
+        "install_state": handoff.get("install_mode", "standard_preview"),
+        "system_ready": current_runtime_health()[0],
+        "runtime_health": current_runtime_health()[1],
+        "network_state": network_state(),
+        "model_status": model_status(),
+        "model_selection_mode": read_json(MODEL_CONFIG, {}).get("selection_mode", handoff.get("model_selection_mode", "auto_hardware")),
+        "completed_at": payload.get("completed_at", ""),
+        "started_at": payload.get("started_at", now_iso()),
+    }
+    return state
+
+
+def write_state(state: dict[str, Any]) -> dict[str, Any]:
+    state.setdefault("completed", False)
+    state.setdefault("step", "welcome")
+    state.setdefault("ai_mode", None)
+    state.setdefault("username", None)
+    state.setdefault("started_at", now_iso())
+    save_json(FIRST_BOOT_FILE, state)
+
+    compat = {
+        "product_name": state.get("product", "Velyx OS"),
+        "preview_label": "Preview",
+        "version": state.get("version", "unknown"),
+        "build_id": state.get("build_id", "unknown"),
+        "channel": state.get("channel", "preview"),
+        "first_boot_required": not bool(state.get("completed", False)),
+        "completed": bool(state.get("completed", False)),
+        "current_step": state.get("step", "welcome"),
+        "ai_mode": state.get("ai_mode") or "local",
+        "assistant_mode": state.get("ai_mode") or "local",
+        "username": state.get("username"),
+        "install_mode": state.get("install_state", "standard_preview"),
+        "system_ready": bool(state.get("system_ready", False)),
+        "runtime_health": state.get("runtime_health", "unknown"),
+        "network_state": state.get("network_state", "unknown"),
+        "model_status": state.get("model_status", "unknown"),
+        "model_selection_mode": state.get("model_selection_mode", "auto_hardware"),
+        "default_space": read_json(INSTALL_HANDOFF, {}).get("default_space", "general"),
+        "predictive_mode": read_json(INSTALL_HANDOFF, {}).get("predictive_mode", "off"),
+        "update_state": read_json(UPDATE_STATE, {}).get("update_state", "unknown"),
+        "recovery_needed": bool(read_json(UPDATE_STATE, {}).get("recovery_needed", False)),
+        "repair_available": True,
+        "recovery_available": True,
+        "completed_at": state.get("completed_at", ""),
+        "last_checked_at": now_iso(),
+    }
+    save_json(COMPAT_STATE_FILE, compat)
+    return state
 
 
 def ensure_state() -> dict[str, Any]:
-    info = version_info()
-    handoff = read_json(INSTALL_HANDOFF, {})
-    ai = read_json(AI_CONFIG, {})
-    model = read_json(MODEL_CONFIG, {})
-    update = read_json(UPDATE_STATE, {})
-    system_ready, health = current_runtime_health()
-    payload = read_json(FIRSTBOOT_STATE, {})
-    defaults = {
-        "product_name": "Velyx OS Preview",
-        "preview_label": "Developer Preview",
-        "version": info.get("version", "unknown"),
-        "build_id": info.get("build_id", "unknown"),
-        "channel": info.get("channel", "preview"),
-        "first_boot_required": True,
+    state = build_defaults()
+    return write_state(state)
+
+
+def start() -> dict[str, Any]:
+    state = ensure_state()
+    if state.get("completed"):
+        return state
+    state["step"] = state.get("step") or "welcome"
+    return write_state(state)
+
+
+def reset() -> dict[str, Any]:
+    state = {
         "completed": False,
-        "current_step": "welcome",
-        "install_action": handoff.get("install_action", "install"),
-        "install_mode": handoff.get("install_mode", "standard_preview"),
-        "system_ready": system_ready,
-        "runtime_health": health,
+        "step": "welcome",
+        "ai_mode": None,
+        "username": None,
+        "started_at": now_iso(),
+        **version_info(),
+        "install_state": "standard_preview",
+        "system_ready": False,
+        "runtime_health": "unknown",
         "network_state": network_state(),
-        "ai_mode": ai.get("mode", handoff.get("ai_mode", "off")),
-        "assistant_mode": ai.get("mode", handoff.get("ai_mode", "off")),
-        "model_selection_mode": model.get("selection_mode", handoff.get("model_selection_mode", "auto_hardware")),
-        "model_backend": ai.get("endpoint_type", handoff.get("model_backend", "stub")),
         "model_status": model_status(),
-        "default_space": handoff.get("default_space", active_space()),
-        "predictive_mode": handoff.get("predictive_mode", ai.get("mode", "off")),
-        "automation_enabled": handoff.get("automation_enabled", True),
-        "privacy_mode": handoff.get("privacy_mode", "standard"),
-        "update_state": update.get("update_state", "unknown"),
-        "recovery_needed": bool(update.get("recovery_needed", False)),
-        "repair_available": True,
-        "recovery_available": update.get("rollback_available", False) or True,
-        "last_checked_at": now_iso(),
-        "completed_at": payload.get("completed_at", ""),
+        "model_selection_mode": read_json(MODEL_CONFIG, {}).get("selection_mode", "auto_hardware"),
+        "completed_at": "",
     }
-    changed = False
-    for key, value in defaults.items():
-        if key not in payload:
-            payload[key] = value
-            changed = True
-    for key in ("version", "build_id", "channel", "system_ready", "runtime_health", "network_state", "model_status", "update_state", "recovery_needed"):
-        if payload.get(key) != defaults[key]:
-            payload[key] = defaults[key]
-            changed = True
-    if changed or not FIRSTBOOT_STATE.exists():
-        save_json(FIRSTBOOT_STATE, payload)
-    return payload
+    log_event("first_boot_reset", "ok")
+    return write_state(state)
 
 
-def print_json(payload: Any) -> None:
-    print(json.dumps(payload, ensure_ascii=False, indent=2))
+def set_step(step: str) -> dict[str, Any]:
+    if step not in {"welcome", "setup", "ready"}:
+        raise RuntimeError("step must be welcome, setup, or ready")
+    state = ensure_state()
+    state["step"] = step
+    log_event("first_boot_step_set", "ok", f"step={step}")
+    return write_state(state)
 
 
 def set_ai_mode(mode: str) -> dict[str, Any]:
-    if mode not in {"off", "suggest", "auto"}:
-        raise RuntimeError("mode must be off, suggest, or auto")
-    ai = read_json(AI_CONFIG, {})
-    ai["mode"] = mode
-    ai["enabled"] = mode != "off"
-    save_json(AI_CONFIG, ai)
+    normalized = normalize_ai_mode(mode)
     state = ensure_state()
-    state["ai_mode"] = mode
-    state["assistant_mode"] = mode
-    save_json(FIRSTBOOT_STATE, state)
-    log_event("first_boot_ai_mode_set", "ok", f"mode={mode}")
-    return state
+    state["ai_mode"] = normalized
+    apply_ai_mode(normalized)
+    log_event("first_boot_ai_mode_set", "ok", f"mode={normalized}")
+    return write_state(state)
+
+
+def set_username(username: str) -> dict[str, Any]:
+    state = ensure_state()
+    cleaned = username.strip() or None
+    state["username"] = cleaned
+    log_event("first_boot_username_set", "ok", f"username={'set' if cleaned else 'empty'}")
+    return write_state(state)
 
 
 def set_model_selection(mode: str) -> dict[str, Any]:
     if mode not in {"manual", "auto_hardware", "auto_task"}:
         raise RuntimeError("selection mode must be manual, auto_hardware, or auto_task")
-    tool = shutil.which("velyx-model")
-    if tool:
-        subprocess.run([tool, "set-selection-mode", mode], capture_output=True, text=True, timeout=10, check=False)
     model = read_json(MODEL_CONFIG, {})
     model["selection_mode"] = mode
     save_json(MODEL_CONFIG, model)
     state = ensure_state()
     state["model_selection_mode"] = mode
-    save_json(FIRSTBOOT_STATE, state)
     log_event("first_boot_model_selection_set", "ok", f"mode={mode}")
-    return state
-
-
-def set_backend(backend: str) -> dict[str, Any]:
-    if backend not in {"stub", "ollama-compatible", "openai-compatible"}:
-        raise RuntimeError("backend must be stub, ollama-compatible, or openai-compatible")
-    ai = read_json(AI_CONFIG, {})
-    ai["endpoint_type"] = backend
-    ai["provider"] = "local"
-    save_json(AI_CONFIG, ai)
-    state = ensure_state()
-    state["model_backend"] = backend
-    save_json(FIRSTBOOT_STATE, state)
-    log_event("first_boot_backend_set", "ok", f"backend={backend}")
-    return state
+    return write_state(state)
 
 
 def set_default_space(space_id: str) -> dict[str, Any]:
+    handoff = read_json(INSTALL_HANDOFF, {})
+    handoff["default_space"] = space_id.strip() or "general"
+    save_json(INSTALL_HANDOFF, handoff)
     state = ensure_state()
-    state["default_space"] = space_id or "general"
-    save_json(FIRSTBOOT_STATE, state)
-    log_event("first_boot_default_space_set", "ok", f"space={space_id}")
-    return state
+    log_event("first_boot_default_space_set", "ok", f"space={handoff['default_space']}")
+    return write_state(state)
 
 
 def set_predictive(mode: str) -> dict[str, Any]:
-    if mode not in {"off", "suggest", "auto"}:
-        raise RuntimeError("predictive mode must be off, suggest, or auto")
+    handoff = read_json(INSTALL_HANDOFF, {})
+    handoff["predictive_mode"] = mode.strip() or "off"
+    save_json(INSTALL_HANDOFF, handoff)
     state = ensure_state()
-    state["predictive_mode"] = mode
-    save_json(FIRSTBOOT_STATE, state)
-    log_event("first_boot_predictive_set", "ok", f"mode={mode}")
-    return state
+    log_event("first_boot_predictive_set", "ok", f"mode={handoff['predictive_mode']}")
+    return write_state(state)
 
 
-def set_step(step: str) -> dict[str, Any]:
-    if step not in {"welcome", "system", "ai", "space", "finish", "complete"}:
-        raise RuntimeError("invalid step")
+def set_backend(backend: str) -> dict[str, Any]:
+    ai = read_json(AI_CONFIG, {})
+    ai["endpoint_type"] = backend.strip() or "stub"
+    save_json(AI_CONFIG, ai)
     state = ensure_state()
-    state["current_step"] = step
-    save_json(FIRSTBOOT_STATE, state)
-    log_event("first_boot_step_set", "ok", f"step={step}")
-    return state
+    log_event("first_boot_backend_set", "ok", f"backend={ai['endpoint_type']}")
+    return write_state(state)
 
 
 def rerun_checks() -> dict[str, Any]:
+    if shutil.which("velyx-network"):
+        subprocess.run(["velyx-network", "check"], capture_output=True, text=True, timeout=6, check=False)
     state = ensure_state()
-    system_ready, health = current_runtime_health()
-    state["system_ready"] = system_ready
-    state["runtime_health"] = health
+    state["system_ready"], state["runtime_health"] = current_runtime_health()
     state["network_state"] = network_state()
     state["model_status"] = model_status()
-    state["last_checked_at"] = now_iso()
-    save_json(FIRSTBOOT_STATE, state)
-    log_event("first_boot_checks", "ok", f"health={health} network={state['network_state']}")
-    return state
+    log_event("first_boot_checks", "ok", f"health={state['runtime_health']} network={state['network_state']}")
+    return write_state(state)
 
 
 def prepare(args: list[str]) -> dict[str, Any]:
     action = "install"
     install_mode = "standard_preview"
-    ai_mode = "off"
+    ai_mode = "local"
     model_selection_mode = "auto_hardware"
     backend = "stub"
     default_space = "general"
     predictive_mode = "off"
     force = False
+
     index = 0
     while index < len(args):
         item = args[index]
@@ -306,13 +369,16 @@ def prepare(args: list[str]) -> dict[str, Any]:
             index += 1
         else:
             raise RuntimeError(f"unknown argument: {item}")
-    existing = ensure_state()
-    if existing.get("completed") and not force:
-        return existing
+
+    state = ensure_state()
+    if state.get("completed") and not force:
+        return state
+
+    normalized_ai = normalize_ai_mode(ai_mode)
     handoff = {
         "install_action": action,
         "install_mode": install_mode,
-        "ai_mode": ai_mode,
+        "ai_mode": normalized_ai,
         "model_selection_mode": model_selection_mode,
         "model_backend": backend,
         "default_space": default_space,
@@ -320,38 +386,38 @@ def prepare(args: list[str]) -> dict[str, Any]:
         "prepared_at": now_iso(),
     }
     save_json(INSTALL_HANDOFF, handoff)
-    state = ensure_state()
     state.update(
         {
-            "first_boot_required": True,
             "completed": False,
-            "completed_at": "",
-            "current_step": "welcome",
-            "install_action": action,
-            "install_mode": install_mode,
-            "ai_mode": ai_mode,
-            "assistant_mode": ai_mode,
+            "step": "welcome",
+            "ai_mode": normalized_ai,
+            "username": state.get("username"),
+            "install_state": install_mode,
             "model_selection_mode": model_selection_mode,
-            "model_backend": backend,
-            "default_space": default_space,
-            "predictive_mode": predictive_mode,
-            "last_checked_at": now_iso(),
+            "completed_at": "",
         }
     )
-    save_json(FIRSTBOOT_STATE, state)
+    set_backend(backend)
+    set_model_selection(model_selection_mode)
+    set_default_space(default_space)
+    set_predictive(predictive_mode)
+    apply_ai_mode(normalized_ai)
     log_event("first_boot_prepared", "ok", f"action={action} install_mode={install_mode}")
-    return state
+    return write_state(state)
 
 
-def complete() -> dict[str, Any]:
+def complete(username: str | None = None, ai_mode: str | None = None) -> dict[str, Any]:
     state = ensure_state()
-    state["first_boot_required"] = False
+    if username is not None:
+        state["username"] = username.strip() or None
+    if ai_mode is not None:
+        state["ai_mode"] = normalize_ai_mode(ai_mode)
     state["completed"] = True
-    state["current_step"] = "complete"
+    state["step"] = "ready"
     state["completed_at"] = now_iso()
-    save_json(FIRSTBOOT_STATE, state)
-    log_event("first_boot_complete", "ok", f"space={state.get('default_space', '')}")
-    return state
+    apply_ai_mode(state.get("ai_mode"))
+    log_event("first_boot_complete", "ok", f"ai_mode={state.get('ai_mode')} username={'set' if state.get('username') else 'empty'}")
+    return write_state(state)
 
 
 def repair_summary() -> dict[str, Any]:
@@ -361,13 +427,13 @@ def repair_summary() -> dict[str, Any]:
         issues.append("Runtime services are not fully ready.")
     if state.get("model_status") == "unavailable":
         issues.append("Local model backend is unavailable.")
-    if state.get("recovery_needed"):
+    if state.get("network_state") == "offline":
+        issues.append("Network is offline; hybrid features and remote update are unavailable.")
+    if read_json(UPDATE_STATE, {}).get("recovery_needed", False):
         issues.append("Recovery is currently recommended.")
-    if state.get("network_state") != "available":
-        issues.append("Network is offline; remote update and web-assisted features are limited.")
     return {
         "status": "needs_attention" if issues else "ready",
-        "summary": issues[0] if issues else "Velyx Preview looks ready.",
+        "summary": issues[0] if issues else "Velyx is ready for first boot completion.",
         "issues": issues,
         "recommended_actions": ["Retry checks", "Open repair", "Enter recovery", "Export diagnostics"],
     }
@@ -375,7 +441,7 @@ def repair_summary() -> dict[str, Any]:
 
 def usage() -> int:
     print(
-        "usage: velyx-firstboot status | prepare [--action install|repair] [--install-mode standard_preview|dev_preview] [--ai-mode off|suggest|auto] [--model-selection manual|auto_hardware|auto_task] [--backend stub|ollama-compatible|openai-compatible] [--default-space <space>] [--predictive-mode off|suggest|auto] [--force] | rerun-checks | set-step <step> | set-ai-mode <mode> | set-model-selection <mode> | set-backend <backend> | set-default-space <space> | set-predictive <mode> | complete | repair-summary",
+        "usage: velyx-firstboot status | start | complete [--username <name>] [--ai-mode local|hybrid] | reset | prepare [--action install|repair|live] [--install-mode <mode>] [--ai-mode local|hybrid|off|suggest|auto] [--model-selection manual|auto_hardware|auto_task] [--backend stub|ollama-compatible|openai-compatible] [--default-space <space>] [--predictive-mode off|suggest|auto] [--force] | rerun-checks | set-step <welcome|setup|ready> | set-ai-mode <local|hybrid> | set-username <name> | set-model-selection <mode> | set-default-space <space> | set-predictive <mode> | set-backend <backend> | repair-summary",
         file=sys.stderr,
     )
     return 1
@@ -385,10 +451,15 @@ def main() -> int:
     ensure_state()
     if len(sys.argv) < 2:
         return usage()
+
     command = sys.argv[1]
     try:
         if command == "status":
             print_json(ensure_state())
+        elif command == "start":
+            print_json(start())
+        elif command == "reset":
+            print_json(reset())
         elif command == "prepare":
             print_json(prepare(sys.argv[2:]))
         elif command == "rerun-checks":
@@ -397,16 +468,31 @@ def main() -> int:
             print_json(set_step(sys.argv[2]))
         elif command == "set-ai-mode" and len(sys.argv) > 2:
             print_json(set_ai_mode(sys.argv[2]))
+        elif command == "set-username" and len(sys.argv) > 2:
+            print_json(set_username(" ".join(sys.argv[2:])))
         elif command == "set-model-selection" and len(sys.argv) > 2:
             print_json(set_model_selection(sys.argv[2]))
-        elif command == "set-backend" and len(sys.argv) > 2:
-            print_json(set_backend(sys.argv[2]))
         elif command == "set-default-space" and len(sys.argv) > 2:
             print_json(set_default_space(sys.argv[2]))
         elif command == "set-predictive" and len(sys.argv) > 2:
             print_json(set_predictive(sys.argv[2]))
+        elif command == "set-backend" and len(sys.argv) > 2:
+            print_json(set_backend(sys.argv[2]))
         elif command == "complete":
-            print_json(complete())
+            username = None
+            ai_mode = None
+            index = 2
+            while index < len(sys.argv):
+                item = sys.argv[index]
+                if item == "--username" and index + 1 < len(sys.argv):
+                    username = sys.argv[index + 1]
+                    index += 2
+                elif item == "--ai-mode" and index + 1 < len(sys.argv):
+                    ai_mode = sys.argv[index + 1]
+                    index += 2
+                else:
+                    raise RuntimeError(f"unknown argument: {item}")
+            print_json(complete(username=username, ai_mode=ai_mode))
         elif command == "repair-summary":
             print_json(repair_summary())
         else:

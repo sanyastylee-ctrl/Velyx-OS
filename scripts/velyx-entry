@@ -85,6 +85,54 @@ def run_live() -> dict[str, Any]:
     return run_tool("velyx-live", [], timeout=60)
 
 
+def shell_command() -> list[str]:
+    env_shell = os.environ.get("VELYX_SHELL_BINARY") or ENV.get("VELYX_SHELL_BINARY")
+    if env_shell:
+        return [env_shell]
+    tool = shutil.which("velyx-shell")
+    if tool:
+        return [tool]
+    prefix = Path(
+        os.environ.get("VELYX_INSTALL_PREFIX")
+        or ENV.get("VELYX_INSTALL_PREFIX")
+        or (Path.home() / ".local/share/velyx")
+    )
+    binary = prefix / "bin" / "velyx-shell"
+    return [str(binary)]
+
+
+def run_shell_session() -> dict[str, Any]:
+    first_boot = run_tool("velyx-firstboot", ["status"], timeout=30)
+    completed = bool(first_boot.get("completed", False))
+    if not completed:
+        run_tool("velyx-firstboot", ["start"], timeout=30)
+        log_event("session_route", "pending_first_boot", "path=first_boot")
+    else:
+        log_event("session_route", "ready", "path=shell")
+
+    command = shell_command()
+    env = os.environ.copy()
+    env.setdefault("VELYX_PRODUCT_ENTRY", "velyx-entry")
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False, env=env)
+    except FileNotFoundError:
+        return {
+            "completed": completed,
+            "first_boot_required": not completed,
+            "shell_command": command,
+            "exit_code": 1,
+            "stderr": "Velyx Shell is not installed yet.",
+        }
+    return {
+        "completed": completed,
+        "first_boot_required": not completed,
+        "shell_command": command,
+        "exit_code": result.returncode,
+        "stdout": result.stdout.strip(),
+        "stderr": result.stderr.strip(),
+    }
+
+
 def interactive() -> dict[str, Any]:
     print("Velyx OS")
     print("========")
@@ -102,6 +150,8 @@ def interactive() -> dict[str, Any]:
 
 def noninteractive(args: list[str]) -> dict[str, str]:
     action = "install"
+    if "--session" in args:
+        return {"action": "session"}
     if "--action" in args:
         index = args.index("--action")
         if index + 1 >= len(args):
@@ -112,11 +162,14 @@ def noninteractive(args: list[str]) -> dict[str, str]:
 
 def main() -> int:
     try:
-        payload = interactive() if "--non-interactive" not in sys.argv else noninteractive(sys.argv[1:])
+        session_mode = "--session" in sys.argv
+        payload = interactive() if "--non-interactive" not in sys.argv and not session_mode else noninteractive(sys.argv[1:])
         action = payload["action"]
         log_event("entry_begin", "started", f"action={action}")
         if action == "install":
             result = run_install()
+        elif action == "session":
+            result = run_shell_session()
         elif action == "live":
             result = run_live()
         elif action == "repair":
@@ -131,15 +184,17 @@ def main() -> int:
             {
                 "status": status,
                 "summary": {
-                    "install": "Velyx Installer finished.",
-                    "live": "Velyx Live path completed.",
-                    "repair": "Velyx repair path finished.",
-                    "diagnostics": "Velyx diagnostics are ready.",
-                }.get(action, "Velyx entry finished."),
-                "entry_action": action,
+                "install": "Velyx Installer finished.",
+                "session": "Velyx session entry finished.",
+                "live": "Velyx Live path completed.",
+                "repair": "Velyx repair path finished.",
+                "diagnostics": "Velyx diagnostics are ready.",
+            }.get(action, "Velyx entry finished."),
+            "entry_action": action,
                 "result": result,
                 "next_step": {
                     "install": "Continue into Velyx First Boot, then Velyx Shell.",
+                    "session": "Velyx Entry routed into First Boot or directly into Velyx Shell.",
                     "live": "You are in Velyx Live preview mode.",
                     "repair": "Return to Velyx Entry or continue with Velyx Recovery.",
                     "diagnostics": "Review diagnostics or continue into install/repair.",

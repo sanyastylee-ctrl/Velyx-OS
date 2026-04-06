@@ -1,47 +1,78 @@
 # Velyx First Boot
 
-After installation, Velyx Shell is the primary session surface, but the first entry now opens `Velyx First Boot` as an onboarding overlay instead of dropping the user into a raw runtime dashboard.
+`Velyx First Boot` is the first experience after installation and reboot. Instead of dropping straight into a raw shell session, Velyx now routes startup through `velyx-entry`, checks first-boot state, and shows a short onboarding flow before normal use.
 
-## State
+## State file
 
-First boot state lives in:
+Canonical first boot state:
+
+- `~/.velyx/first_boot.json`
+
+Compatibility mirror:
 
 - `~/.velyx/first_boot_state.json`
-- `~/.velyx/first_boot.log`
 
-## Flow
+Base shape:
 
-The first boot experience covers:
+```json
+{
+  "completed": false,
+  "step": "welcome",
+  "ai_mode": null,
+  "username": null
+}
+```
 
-1. Welcome to Velyx
-2. System ready check
-3. AI and model setup
-4. Network visibility
-5. Default space selection
-6. Predictive feature toggle
-7. Enter Velyx
+After completion:
 
-## Commands
+```json
+{
+  "completed": true
+}
+```
 
-Helper CLI:
+## Screens
+
+The UI is intentionally short and capped at three screens:
+
+1. `Welcome`
+2. `Setup`
+3. `Ready`
+
+This keeps the setup path fast enough to finish in under a minute.
+
+## CLI
 
 ```bash
 velyx-firstboot status
-velyx-firstboot rerun-checks
-velyx-firstboot set-ai-mode suggest
-velyx-firstboot set-model-selection auto_task
-velyx-firstboot set-default-space development
-velyx-firstboot set-predictive suggest
-velyx-firstboot complete
+velyx-firstboot start
+velyx-firstboot complete --username "Sasha" --ai-mode local
+velyx-firstboot reset
 ```
 
-## Repair path
+## Session flow
 
-First boot also exposes:
+Startup now follows:
 
-- repair / recovery entry
-- diagnostics export
-- model readiness
-- update / recovery state
+`Velyx Entry -> Velyx First Boot -> Velyx Shell`
 
-This keeps recovery inside the Velyx UX instead of pushing the user into a substrate-first workflow.
+If `first_boot.json` says `completed=false`, `velyx-entry --session` launches the shell with the first-boot overlay visible.
+
+If `completed=true`, `velyx-entry --session` opens normal `Velyx Shell`.
+
+## Integration
+
+- chosen AI mode is written into Velyx AI / assistant config
+- `Hybrid` keeps network-assisted assistant behavior available
+- `Local` keeps the assistant local-first
+- Dev Mode remains inaccessible until the user has entered the shell
+
+## Reset behavior
+
+Running:
+
+```bash
+velyx-firstboot reset
+```
+
+marks the setup as incomplete again, so the next session returns to `Velyx First Boot`.

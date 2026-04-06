@@ -1195,7 +1195,10 @@ void PermissionClient::refreshFirstBootState()
         tickProcess.waitForFinished(1200);
     }
 
-    const QString statePath = QDir::home().filePath(".velyx/first_boot_state.json");
+    QString statePath = QDir::home().filePath(".velyx/first_boot.json");
+    if (!QFile::exists(statePath)) {
+        statePath = QDir::home().filePath(".velyx/first_boot_state.json");
+    }
     bool required = false;
     QString step {"welcome"};
     QString version;
@@ -1212,8 +1215,12 @@ void PermissionClient::refreshFirstBootState()
         const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
         if (document.isObject()) {
             const QJsonObject object = document.object();
-            required = object.value("first_boot_required").toBool(required);
-            step = object.value("current_step").toString(step);
+            if (object.contains("completed")) {
+                required = !object.value("completed").toBool(false);
+            } else {
+                required = object.value("first_boot_required").toBool(required);
+            }
+            step = object.value("step").toString(object.value("current_step").toString(step));
             version = object.value("version").toString(version);
             installMode = object.value("install_mode").toString(installMode);
             networkState = object.value("network_state").toString(networkState);
@@ -2208,6 +2215,38 @@ void PermissionClient::completeFirstBoot()
         refreshFirstBootState();
         updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "Welcome to Velyx." : QString::fromUtf8(process.readAllStandardError()).trimmed());
         updateStatusDetails("first_boot_complete", process.exitCode() == 0 ? "ok" : "failed", m_firstBootDefaultSpace, "continue_work");
+    }
+}
+
+void PermissionClient::completeFirstBootSetup(const QString &username, const QString &aiMode)
+{
+    QStringList arguments {"complete"};
+    const QString trimmedUsername = username.trimmed();
+    const QString normalizedMode = aiMode.trimmed().toLower();
+    if (!trimmedUsername.isEmpty()) {
+        arguments << "--username" << trimmedUsername;
+    }
+    if (!normalizedMode.isEmpty()) {
+        arguments << "--ai-mode" << normalizedMode;
+    }
+
+    QProcess process;
+    process.start("velyx-firstboot", arguments);
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        refreshFirstBootState();
+        refreshAiState();
+        refreshAssistantState();
+        refreshRuntimeStatus();
+        updateLaunchState(
+            process.exitCode() == 0 ? "ok" : "error",
+            process.exitCode() == 0
+                ? "Velyx First Boot completed."
+                : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails(
+            "first_boot_complete",
+            process.exitCode() == 0 ? "ok" : "failed",
+            normalizedMode.isEmpty() ? m_firstBootAiMode : normalizedMode,
+            "enter_shell");
     }
 }
 
