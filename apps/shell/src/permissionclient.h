@@ -43,6 +43,9 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString lastIntentResult READ lastIntentResult NOTIFY intentsChanged)
     Q_PROPERTY(QString lastRuleId READ lastRuleId NOTIFY rulesChanged)
     Q_PROPERTY(QString lastRuleResult READ lastRuleResult NOTIFY rulesChanged)
+    Q_PROPERTY(QString agentSummary READ agentSummary NOTIFY agentStateChanged)
+    Q_PROPERTY(QString lastAgentAction READ lastAgentAction NOTIFY agentStateChanged)
+    Q_PROPERTY(QString lastAgentResult READ lastAgentResult NOTIFY agentStateChanged)
     Q_PROPERTY(QString activeSpaceId READ activeSpaceId NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceName READ activeSpaceName NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceState READ activeSpaceState NOTIFY spacesChanged)
@@ -57,6 +60,7 @@ public:
     Q_INVOKABLE void refreshSpaces();
     Q_INVOKABLE void refreshIntents();
     Q_INVOKABLE void refreshRules();
+    Q_INVOKABLE void refreshAgentState();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
     Q_INVOKABLE void selectActiveApp(const QString &appId);
@@ -79,6 +83,7 @@ public:
     Q_INVOKABLE void activateSpace(const QString &spaceId);
     Q_INVOKABLE void runIntent(const QString &intentId);
     Q_INVOKABLE void runRule(const QString &ruleId);
+    Q_INVOKABLE void runAgentCommand(const QString &command);
     void setInputControlMode(const QString &mode, const QString &details);
 
     QVariantList apps() const;
@@ -114,6 +119,9 @@ public:
     QString lastIntentResult() const;
     QString lastRuleId() const;
     QString lastRuleResult() const;
+    QString agentSummary() const;
+    QString lastAgentAction() const;
+    QString lastAgentResult() const;
     QString activeSpaceId() const;
     QString activeSpaceName() const;
     QString activeSpaceState() const;
@@ -139,6 +147,7 @@ signals:
     void runtimeStatusChanged();
     void activeAppChanged();
     void inputStatusChanged();
+    void agentStateChanged();
 
 private:
     QVariantMap cachedAppInfo(const QString &appId) const;
@@ -200,6 +209,9 @@ private:
     QString m_lastIntentResult;
     QString m_lastRuleId;
     QString m_lastRuleResult;
+    QString m_agentSummary;
+    QString m_lastAgentAction;
+    QString m_lastAgentResult;
     QString m_activeSpaceId;
     QString m_activeSpaceName;
     QString m_activeSpaceState {"unknown"};

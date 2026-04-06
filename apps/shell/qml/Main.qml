@@ -20,7 +20,9 @@ ApplicationWindow {
     Component.onCompleted: {
         permissionClient.refreshRuntimeStatus()
         permissionClient.refreshSpaces()
+        permissionClient.refreshIntents()
         permissionClient.refreshRules()
+        permissionClient.refreshAgentState()
         permissionClient.refreshOpenApps()
         permissionClient.refreshApps()
     }
@@ -104,7 +106,9 @@ ApplicationWindow {
         onTriggered: {
             permissionClient.refreshRuntimeStatus()
             permissionClient.refreshSpaces()
+            permissionClient.refreshIntents()
             permissionClient.refreshRules()
+            permissionClient.refreshAgentState()
             permissionClient.refreshOpenApps()
             permissionClient.refreshSelectedAppRuntime()
             permissionClient.refreshApps()
@@ -269,6 +273,7 @@ ApplicationWindow {
                                 permissionClient.refreshSpaces()
                                 permissionClient.refreshIntents()
                                 permissionClient.refreshRules()
+                                permissionClient.refreshAgentState()
                                 permissionClient.refreshOpenApps()
                                 permissionClient.refreshApps()
                             }
@@ -419,6 +424,11 @@ ApplicationWindow {
                                     }
                                 }
                             }
+                        }
+
+                        AgentPanel {
+                            Layout.fillWidth: true
+                            permissionClient: permissionClient
                         }
 
                         ScrollView {

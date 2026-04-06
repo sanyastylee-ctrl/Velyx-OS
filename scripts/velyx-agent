@@ -1,0 +1,351 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Callable, Optional
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV_FILE_VALUES = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV_FILE_VALUES.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+INTENT_STATE = STATE_DIR / "intent_state.json"
+RULES_STATE = STATE_DIR / "rules_state.json"
+UPDATE_STATE = STATE_DIR / "update_state.json"
+SESSION_STATE = STATE_DIR / "session_state.json"
+AGENT_LOG = STATE_DIR / "agent.log"
+AGENT_STATE = STATE_DIR / "agent_state.json"
+
+
+def read_json(path: Path, default):
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+    return default
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with AGENT_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+@dataclass
+class AgentAction:
+    command: str
+    payload: dict
+    reason: str
+
+
+class SessionAdapter:
+    def snapshot(self) -> dict:
+        return read_json(SESSION_STATE, {})
+
+    def summary(self) -> dict:
+        snapshot = self.snapshot()
+        apps = snapshot.get("apps", [])
+        running_apps = [app.get("app_id", "") for app in apps if app.get("state") == "running"]
+        failed_apps = [app.get("app_id", "") for app in apps if app.get("state") == "failed"]
+        update = read_json(UPDATE_STATE, {})
+        intent = read_json(INTENT_STATE, {})
+        rules = read_json(RULES_STATE, {})
+        return {
+            "active_space": snapshot.get("active_space_id", ""),
+            "active_space_state": snapshot.get("active_space_state", ""),
+            "session_state": snapshot.get("current_state", ""),
+            "session_health": "failed" if snapshot.get("current_state") == "Failed" else snapshot.get("current_state", "").lower(),
+            "running_apps": running_apps,
+            "failed_apps": failed_apps,
+            "last_intent": intent.get("last_intent_id", ""),
+            "last_rule": rules.get("last_rule_id", ""),
+            "last_rule_result": rules.get("last_result", ""),
+            "update_state": update.get("update_state", ""),
+            "last_update_result": update.get("last_update_result", ""),
+            "recovery_needed": update.get("recovery_needed", False),
+            "current_version": update.get("current_version", ""),
+        }
+
+
+class CommandAdapter:
+    def run(self, argv: list[str]) -> subprocess.CompletedProcess:
+        return subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+class IntentAdapter:
+    def __init__(self, runner: CommandAdapter) -> None:
+        self.runner = runner
+
+    def run_intent(self, intent_id: str) -> tuple[bool, str]:
+        tool = shutil.which("velyx-intent")
+        if not tool:
+            return False, "velyx-intent unavailable"
+        result = self.runner.run([tool, "run", intent_id])
+        return result.returncode == 0, (result.stdout.strip() or result.stderr.strip())
+
+
+class SpaceAdapter:
+    def __init__(self, runner: CommandAdapter) -> None:
+        self.runner = runner
+
+    def activate_space(self, space_id: str) -> tuple[bool, str]:
+        tool = shutil.which("velyx-space")
+        if not tool:
+            return False, "velyx-space unavailable"
+        result = self.runner.run([tool, "activate", space_id])
+        return result.returncode == 0, (result.stdout.strip() or result.stderr.strip())
+
+
+class LauncherAdapter:
+    def _call(self, method: str, app_id: str) -> tuple[bool, str]:
+        busctl = shutil.which("busctl")
+        if not busctl:
+            return False, "busctl unavailable"
+        result = subprocess.run(
+            [busctl, "--user", "call", "com.velyx.Launcher", "/com/velyx/Launcher", "com.velyx.Launcher1", method, "s", app_id],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        return result.returncode == 0, (result.stdout.strip() or result.stderr.strip())
+
+    def launch_app(self, app_id: str) -> tuple[bool, str]:
+        return self._call("Launch", app_id)
+
+    def restart_app(self, app_id: str) -> tuple[bool, str]:
+        return self._call("RestartApp", app_id)
+
+    def stop_app(self, app_id: str) -> tuple[bool, str]:
+        return self._call("StopApp", app_id)
+
+
+class UpdateAdapter:
+    def __init__(self, runner: CommandAdapter) -> None:
+        self.runner = runner
+
+    def run_update(self) -> tuple[bool, str]:
+        tool = shutil.which("velyx-update")
+        if not tool:
+            return False, "velyx-update unavailable"
+        result = self.runner.run([tool])
+        return result.returncode == 0, (result.stdout.strip() or result.stderr.strip())
+
+
+class RecoveryAdapter:
+    def __init__(self, runner: CommandAdapter) -> None:
+        self.runner = runner
+
+    def enter_recovery(self) -> tuple[bool, str]:
+        tool = shutil.which("velyx-recovery")
+        if not tool:
+            return False, "velyx-recovery unavailable"
+        result = self.runner.run([tool])
+        return result.returncode == 0, (result.stdout.strip() or result.stderr.strip())
+
+    def restart_runtime(self) -> tuple[bool, str]:
+        tool = shutil.which("velyx-restart.sh")
+        if not tool:
+            return False, "velyx-restart.sh unavailable"
+        result = self.runner.run([tool])
+        return result.returncode == 0, (result.stdout.strip() or result.stderr.strip())
+
+
+class Parser:
+    def parse(self, argv: list[str]) -> AgentAction:
+        if not argv:
+            raise ValueError("missing command")
+        name = argv[0]
+        if name == "status":
+            return AgentAction("get_system_status", {}, "Explicit status request")
+        if name in {"summary", "runtime-summary", "dev-summary"}:
+            return AgentAction("get_system_summary", {"mode": name}, "Explicit summary request")
+        if name == "run-intent" and len(argv) >= 2:
+            return AgentAction("run_intent", {"intent_id": argv[1]}, f"Requested run-intent {argv[1]}")
+        if name == "switch-space" and len(argv) >= 2:
+            return AgentAction("switch_to_space", {"space_id": argv[1]}, f"Requested switch-space {argv[1]}")
+        if name == "launch-app" and len(argv) >= 2:
+            return AgentAction("launch_app", {"app_id": argv[1]}, f"Requested launch-app {argv[1]}")
+        if name == "restart-app" and len(argv) >= 2:
+            return AgentAction("restart_app", {"app_id": argv[1]}, f"Requested restart-app {argv[1]}")
+        if name == "stop-app" and len(argv) >= 2:
+            return AgentAction("stop_app", {"app_id": argv[1]}, f"Requested stop-app {argv[1]}")
+        if name in {"run-update", "update"}:
+            return AgentAction("run_update", {}, "Requested update")
+        if name in {"enter-recovery", "recovery"}:
+            return AgentAction("enter_recovery", {}, "Requested recovery")
+        if name == "explain":
+            return AgentAction("explain", {}, "Requested safe boundary explanation")
+        if name == "command":
+            return self.parse_text_command(" ".join(argv[1:]))
+        raise ValueError("unsupported command")
+
+    def parse_text_command(self, text: str) -> AgentAction:
+        command = text.strip()
+        if not command:
+            raise ValueError("empty command")
+        parts = command.split()
+        head = parts[0].lower()
+        if head == "status":
+            return AgentAction("get_system_status", {}, "Parsed text command status")
+        if head == "summary":
+            return AgentAction("get_system_summary", {"mode": "summary"}, "Parsed text command summary")
+        if head == "run" and len(parts) >= 2:
+            return AgentAction("run_intent", {"intent_id": parts[1]}, f"Parsed text command run {parts[1]}")
+        if head == "switch" and len(parts) >= 2:
+            return AgentAction("switch_to_space", {"space_id": parts[1]}, f"Parsed text command switch {parts[1]}")
+        if head == "launch" and len(parts) >= 2:
+            return AgentAction("launch_app", {"app_id": parts[1]}, f"Parsed text command launch {parts[1]}")
+        if head == "restart" and len(parts) >= 2:
+            return AgentAction("restart_app", {"app_id": parts[1]}, f"Parsed text command restart {parts[1]}")
+        if head == "stop" and len(parts) >= 2:
+            return AgentAction("stop_app", {"app_id": parts[1]}, f"Parsed text command stop {parts[1]}")
+        if head == "recovery":
+            return AgentAction("enter_recovery", {}, "Parsed text command recovery")
+        if head == "update":
+            return AgentAction("run_update", {}, "Parsed text command update")
+        if head == "restart-runtime":
+            return AgentAction("restart_runtime", {}, "Parsed text command restart-runtime")
+        raise ValueError(f"unsupported structured command: {command}")
+
+
+class Executor:
+    def __init__(self) -> None:
+        runner = CommandAdapter()
+        self.intent = IntentAdapter(runner)
+        self.space = SpaceAdapter(runner)
+        self.launcher = LauncherAdapter()
+        self.update = UpdateAdapter(runner)
+        self.recovery = RecoveryAdapter(runner)
+        self.session = SessionAdapter()
+        self.allowed: dict[str, Callable[[dict], tuple[bool, str]]] = {
+            "run_intent": lambda payload: self.intent.run_intent(payload["intent_id"]),
+            "switch_to_space": lambda payload: self.space.activate_space(payload["space_id"]),
+            "launch_app": lambda payload: self.launcher.launch_app(payload["app_id"]),
+            "restart_app": lambda payload: self.launcher.restart_app(payload["app_id"]),
+            "stop_app": lambda payload: self.launcher.stop_app(payload["app_id"]),
+            "run_update": lambda payload: self.update.run_update(),
+            "enter_recovery": lambda payload: self.recovery.enter_recovery(),
+            "restart_runtime": lambda payload: self.recovery.restart_runtime(),
+        }
+
+    def execute(self, action: AgentAction) -> tuple[bool, str]:
+        if action.command == "get_system_status":
+            tool = shutil.which("velyx-status")
+            if tool:
+                result = subprocess.run([tool], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                if result.returncode == 0:
+                    return True, result.stdout.strip()
+            return True, self.format_summary(self.session.summary(), compact=False)
+        if action.command == "get_system_summary":
+            return True, self.format_summary(self.session.summary(), compact=action.payload.get("mode") != "dev-summary")
+        if action.command == "explain":
+            return True, "Allowed actions: run_intent, switch_to_space, launch_app, restart_app, stop_app, run_update, enter_recovery, restart_runtime, read status."
+        handler = self.allowed.get(action.command)
+        if handler is None:
+            return False, f"action not allowed: {action.command}"
+        return handler(action.payload)
+
+    @staticmethod
+    def format_summary(summary: dict, compact: bool) -> str:
+        if compact:
+            return (
+                f"space={summary.get('active_space') or '-'} | "
+                f"session={summary.get('session_state') or '-'} | "
+                f"update={summary.get('update_state') or '-'} | "
+                f"recovery={summary.get('recovery_needed')} | "
+                f"running={len(summary.get('running_apps', []))}"
+            )
+        return json.dumps(summary, ensure_ascii=False, indent=2)
+
+
+def save_agent_state(action: str, result: str, message: str, summary: Optional[str] = None) -> None:
+    payload = read_json(AGENT_STATE, {})
+    payload.update(
+        {
+            "last_action": action,
+            "last_result": result,
+            "last_message": message,
+            "last_summary": summary if summary is not None else payload.get("last_summary", ""),
+            "last_run_at": now_iso(),
+        }
+    )
+    save_json(AGENT_STATE, payload)
+
+
+def usage() -> int:
+    print(
+        "usage: velyx-agent status | summary | runtime-summary | dev-summary | run-intent <intent_id> | switch-space <space_id> | launch-app <app_id> | restart-app <app_id> | stop-app <app_id> | run-update | enter-recovery | explain | command <structured-text>",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return usage()
+
+    parser = Parser()
+    executor = Executor()
+    raw_args = sys.argv[1:]
+
+    try:
+        action = parser.parse(raw_args)
+    except ValueError as err:
+        log_event("agent_request_failed", "failed", f"reason={err}")
+        save_agent_state("invalid", "failed", str(err))
+        print(str(err), file=sys.stderr)
+        return 1
+
+    log_event("agent_request_begin", "started", f"command={action.command} reason={action.reason}")
+    log_event("agent_action_selected", "ok", f"command={action.command} payload={json.dumps(action.payload, ensure_ascii=False)}")
+    ok, message = executor.execute(action)
+    result = "ok" if ok else "failed"
+    log_event("agent_action_dispatched", result, f"command={action.command} message={message}")
+
+    summary = None
+    if action.command in {"get_system_status", "get_system_summary"}:
+        summary = message
+        log_event("agent_summary_generated", "ok", f"command={action.command}")
+    else:
+        summary = executor.format_summary(executor.session.summary(), compact=True)
+
+    save_agent_state(action.command, result, message, summary)
+    log_event("agent_request_ok" if ok else "agent_request_failed", result, f"command={action.command}")
+
+    if ok:
+        print(message)
+        return 0
+    print(message, file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

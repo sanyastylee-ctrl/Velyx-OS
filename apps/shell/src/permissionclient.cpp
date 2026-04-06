@@ -244,6 +244,21 @@ QString PermissionClient::lastRuleResult() const
     return m_lastRuleResult;
 }
 
+QString PermissionClient::agentSummary() const
+{
+    return m_agentSummary;
+}
+
+QString PermissionClient::lastAgentAction() const
+{
+    return m_lastAgentAction;
+}
+
+QString PermissionClient::lastAgentResult() const
+{
+    return m_lastAgentResult;
+}
+
 QString PermissionClient::activeSpaceId() const
 {
     return m_activeSpaceId;
@@ -291,6 +306,7 @@ void PermissionClient::refreshApps()
     refreshSpaces();
     refreshIntents();
     refreshRules();
+    refreshAgentState();
 
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     if (!launcher.isValid()) {
@@ -468,6 +484,43 @@ void PermissionClient::refreshRules()
     }
     if (changed) {
         emit rulesChanged();
+    }
+}
+
+void PermissionClient::refreshAgentState()
+{
+    const QString agentStatePath = QDir::home().filePath(".velyx/agent_state.json");
+
+    QString summary;
+    QString lastAction;
+    QString lastResult;
+
+    QFile stateFile(agentStatePath);
+    if (stateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            summary = object.value("last_summary").toString();
+            lastAction = object.value("last_action").toString();
+            lastResult = object.value("last_result").toString();
+        }
+    }
+
+    bool changed = false;
+    if (m_agentSummary != summary) {
+        m_agentSummary = summary;
+        changed = true;
+    }
+    if (m_lastAgentAction != lastAction) {
+        m_lastAgentAction = lastAction;
+        changed = true;
+    }
+    if (m_lastAgentResult != lastResult) {
+        m_lastAgentResult = lastResult;
+        changed = true;
+    }
+    if (changed) {
+        emit agentStateChanged();
     }
 }
 
@@ -967,6 +1020,40 @@ void PermissionClient::runRule(const QString &ruleId)
 
     updateLaunchState("error", QString("Rule %1 недоступен").arg(ruleId));
     updateStatusDetails("rule_run", "failed", ruleId, "retry");
+}
+
+void PermissionClient::runAgentCommand(const QString &command)
+{
+    const QString trimmed = command.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-agent", {"command", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? QString("Agent command выполнен: %1").arg(trimmed) : output);
+            updateStatusDetails("agent_command", "ok", trimmed, "refresh_runtime");
+            refreshAgentState();
+            refreshRuntimeStatus();
+            refreshSpaces();
+            refreshIntents();
+            refreshRules();
+            refreshApps();
+            refreshOpenApps();
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? QString("Не удалось выполнить agent command: %1").arg(trimmed) : errorOutput);
+        updateStatusDetails("agent_command", "failed", trimmed, "retry");
+        refreshAgentState();
+        return;
+    }
+
+    updateLaunchState("error", QString("Agent layer недоступен для команды: %1").arg(trimmed));
+    updateStatusDetails("agent_command", "failed", trimmed, "retry");
 }
 
 void PermissionClient::launchSelectedApp()

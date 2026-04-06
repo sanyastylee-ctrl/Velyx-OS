@@ -17,6 +17,7 @@ qt_add_qml_module(velyx-shell
         qml/StatusChip.qml
         qml/SpaceCard.qml
         qml/IntentCard.qml
+        qml/AgentPanel.qml
         qml/AppCard.qml
         qml/SystemStatusPanel.qml
         qml/SpaceOverviewPanel.qml

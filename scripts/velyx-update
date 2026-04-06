@@ -446,6 +446,7 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-space" \
   "${STAGING_PREFIX}/bin/velyx-intent" \
   "${STAGING_PREFIX}/bin/velyx-rule" \
+  "${STAGING_PREFIX}/bin/velyx-agent" \
   "${STAGING_PREFIX}/bin/velyx-shell" \
   "${STAGING_PREFIX}/libexec/velyx-user-session-bootstrap" \
   "${STAGING_PREFIX}/libexec/velyx-recovery-bootstrap" \

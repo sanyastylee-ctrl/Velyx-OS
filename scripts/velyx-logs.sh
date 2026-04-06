@@ -42,7 +42,9 @@ for file in \
   "${STATE_DIR}/intent_state.json" \
   "${STATE_DIR}/rules.log" \
   "${STATE_DIR}/rules_registry.json" \
-  "${STATE_DIR}/rules_state.json"
+  "${STATE_DIR}/rules_state.json" \
+  "${STATE_DIR}/agent.log" \
+  "${STATE_DIR}/agent_state.json"
 do
   if [[ -f "${file}" ]]; then
     echo "-- ${file} --"
