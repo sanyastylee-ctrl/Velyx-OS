@@ -53,5 +53,25 @@ Shell стартует не вручную, а как часть user session li
 - `velyx-status`
 - `velyx-restart.sh`
 - `velyx-logs.sh`
+- `velyx-update`
+- `velyx-recovery`
 
 Они ставятся в `~/.local/bin/`.
+
+## Update / recovery
+
+После установки доступен staged update path:
+
+```bash
+./scripts/velyx-update --source-root "$PWD"
+```
+
+Manual recovery:
+
+```bash
+velyx-recovery
+```
+
+Подробности:
+
+- [update-recovery.md](./update-recovery.md)

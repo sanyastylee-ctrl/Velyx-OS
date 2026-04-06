@@ -19,12 +19,20 @@ echo
 echo "== journald: permissions =="
 journalctl --user -u velyx-permissions.service -n "${LINES}" --no-pager 2>/dev/null || true
 echo
+echo "== journald: update-engine =="
+journalctl --user -u velyx-update-engine.service -n "${LINES}" --no-pager 2>/dev/null || true
+echo
+echo "== journald: recovery =="
+journalctl --user -u velyx-recovery.service -n "${LINES}" --no-pager 2>/dev/null || true
+echo
 echo "== file logs =="
 for file in \
   "${STATE_DIR}/session_manager_audit.log" \
   "${STATE_DIR}/launcher_history.log" \
   "${STATE_DIR}/sandbox_audit.log" \
-  "${STATE_DIR}/shell_mvp.log"
+  "${STATE_DIR}/shell_mvp.log" \
+  "${STATE_DIR}/update.log" \
+  "${STATE_DIR}/update_state.json"
 do
   if [[ -f "${file}" ]]; then
     echo "-- ${file} --"

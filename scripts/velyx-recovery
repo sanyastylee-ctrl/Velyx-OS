@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/velyx/velyx.env"
+if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+fi
+
+PREFIX="${VELYX_INSTALL_PREFIX:-$HOME/.local/share/velyx}"
+STATE_DIR="${VELYX_STATE_DIR:-$HOME/.velyx}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/velyx"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UPDATE_DIR="${STATE_DIR}/updates"
+ROLLBACK_PREFIX="${UPDATE_DIR}/last-known-good-prefix"
+ROLLBACK_UNIT_DIR="${UPDATE_DIR}/last-known-good-units"
+FAILED_ROOT="${UPDATE_DIR}/failed"
+STATE_FILE="${STATE_DIR}/update_state.json"
+LOG_FILE="${STATE_DIR}/update.log"
+AUTO_MODE="false"
+
+mkdir -p "${STATE_DIR}" "${UPDATE_DIR}" "${FAILED_ROOT}"
+
+log_event() {
+  local event="$1"
+  local status="$2"
+  local detail="${3:-}"
+  printf '%s event=%s status=%s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "${event}" "${status}" "${detail}" >> "${LOG_FILE}"
+}
+
+json_escape() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/ }"
+  printf '%s' "${value}"
+}
+
+json_get_string() {
+  local key="$1"
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "${STATE_FILE}" | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true
+}
+
+json_get_bool() {
+  local key="$1"
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    printf 'false\n'
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" "${STATE_FILE}" | head -n1 | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || printf 'false\n'
+}
+
+read_installed_version() {
+  if [[ -f "${PREFIX}/share/version.txt" ]]; then
+    awk -F= '/^version=/{print $2; exit}' "${PREFIX}/share/version.txt"
+    return 0
+  fi
+  json_get_string "current_version"
+}
+
+write_state() {
+  local current_version="$1"
+  local staged_version="$2"
+  local last_good_version="$3"
+  local update_state="$4"
+  local last_update_result="$5"
+  local rollback_available="$6"
+  local recovery_needed="$7"
+  local last_failed_version="$8"
+  local last_recovery_result="$9"
+  local tmp="${STATE_FILE}.tmp"
+
+  cat > "${tmp}" <<EOF
+{
+  "current_version": "$(json_escape "${current_version}")",
+  "staged_version": "$(json_escape "${staged_version}")",
+  "last_good_version": "$(json_escape "${last_good_version}")",
+  "update_state": "$(json_escape "${update_state}")",
+  "last_update_result": "$(json_escape "${last_update_result}")",
+  "rollback_available": ${rollback_available},
+  "recovery_needed": ${recovery_needed},
+  "last_failed_version": "$(json_escape "${last_failed_version}")",
+  "last_recovery_result": "$(json_escape "${last_recovery_result}")",
+  "current_prefix": "$(json_escape "${PREFIX}")",
+  "staging_root": "$(json_escape "${UPDATE_DIR}/staged")",
+  "rollback_prefix": "$(json_escape "${ROLLBACK_PREFIX}")",
+  "last_update_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+  mv "${tmp}" "${STATE_FILE}"
+}
+
+restore_runtime_units() {
+  if [[ -d "${ROLLBACK_UNIT_DIR}" ]]; then
+    mkdir -p "${UNIT_DIR}" "${CONFIG_DIR}"
+    if compgen -G "${ROLLBACK_UNIT_DIR}/velyx*" >/dev/null; then
+      cp -a "${ROLLBACK_UNIT_DIR}"/velyx* "${UNIT_DIR}/"
+    fi
+    if [[ -f "${ROLLBACK_UNIT_DIR}/velyx.env" ]]; then
+      cp -a "${ROLLBACK_UNIT_DIR}/velyx.env" "${ENV_FILE}"
+    fi
+  fi
+}
+
+health_check() {
+  local attempts=0
+  while [[ "${attempts}" -lt 20 ]]; do
+    local launcher_state permissions_state session_state shell_state
+    launcher_state="$(systemctl --user is-active velyx-launcher.service 2>/dev/null || true)"
+    permissions_state="$(systemctl --user is-active velyx-permissions.service 2>/dev/null || true)"
+    session_state="$(systemctl --user is-active velyx-session-manager.service 2>/dev/null || true)"
+    shell_state="$(systemctl --user is-active velyx-shell.service 2>/dev/null || true)"
+    if [[ "${launcher_state}" == "active" && "${permissions_state}" == "active" && "${session_state}" == "active" && "${shell_state}" == "active" ]]; then
+      return 0
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+  return 1
+}
+
+if [[ "${1:-}" == "--auto" ]]; then
+  AUTO_MODE="true"
+fi
+
+RECOVERY_NEEDED="$(json_get_bool "recovery_needed")"
+ROLLBACK_AVAILABLE="$(json_get_bool "rollback_available")"
+
+if [[ "${AUTO_MODE}" == "true" && "${RECOVERY_NEEDED}" != "true" ]]; then
+  exit 0
+fi
+
+if [[ "${ROLLBACK_AVAILABLE}" != "true" || ! -d "${ROLLBACK_PREFIX}" ]]; then
+  log_event "recovery_failed" "failed" "rollback_available=false"
+  write_state "$(read_installed_version)" "" "$(json_get_string "last_good_version")" "failed" "recovery_unavailable" "false" "true" "$(json_get_string "last_failed_version")" "recovery_unavailable"
+  if [[ "${AUTO_MODE}" == "true" ]]; then
+    exit 0
+  fi
+  echo "recovery unavailable: no last known good payload present" >&2
+  exit 1
+fi
+
+FAILED_VERSION="$(json_get_string "last_failed_version")"
+LAST_GOOD_VERSION="$(json_get_string "last_good_version")"
+FAILED_SNAPSHOT_DIR="${FAILED_ROOT}/manual-recovery-$(date -u +"%Y%m%d%H%M%S")"
+log_event "recovery_begin" "started" "last_failed_version=${FAILED_VERSION} last_good_version=${LAST_GOOD_VERSION}"
+systemctl --user stop velyx-session.target >/dev/null 2>&1 || true
+systemctl --user stop velyx-session-bootstrap.service >/dev/null 2>&1 || true
+
+if [[ -d "${PREFIX}" ]]; then
+  rm -rf "${FAILED_SNAPSHOT_DIR}"
+  mv "${PREFIX}" "${FAILED_SNAPSHOT_DIR}" || true
+fi
+
+mv "${ROLLBACK_PREFIX}" "${PREFIX}"
+restore_runtime_units
+systemctl --user daemon-reload >/dev/null 2>&1 || true
+systemctl --user restart velyx-session-manager.service >/dev/null 2>&1 || true
+systemctl --user restart velyx-session-bootstrap.service >/dev/null 2>&1 || true
+
+if health_check; then
+  CURRENT_VERSION="$(read_installed_version)"
+  rm -rf "${ROLLBACK_PREFIX}.tmp"
+  cp -a "${PREFIX}" "${ROLLBACK_PREFIX}.tmp"
+  rm -rf "${ROLLBACK_PREFIX}"
+  mv "${ROLLBACK_PREFIX}.tmp" "${ROLLBACK_PREFIX}"
+  write_state "${CURRENT_VERSION}" "" "${CURRENT_VERSION}" "recovered" "recovery_ok" "true" "false" "${FAILED_VERSION}" "recovery_ok"
+  log_event "recovery_ok" "ok" "restored_version=${CURRENT_VERSION}"
+  if [[ "${AUTO_MODE}" != "true" ]]; then
+    echo "Velyx recovery restored version ${CURRENT_VERSION}"
+  fi
+  exit 0
+fi
+
+write_state "$(read_installed_version)" "" "${LAST_GOOD_VERSION}" "failed" "recovery_failed" "false" "true" "${FAILED_VERSION}" "recovery_failed"
+log_event "recovery_failed" "failed" "last_good_version=${LAST_GOOD_VERSION}"
+if [[ "${AUTO_MODE}" == "true" ]]; then
+  exit 0
+fi
+echo "recovery failed; manual inspection required" >&2
+exit 1

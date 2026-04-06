@@ -17,6 +17,6 @@ fi
 systemctl --user daemon-reload
 systemctl --user restart velyx-session-manager.service
 systemctl --user restart velyx-session-bootstrap.service
-systemctl --user try-restart velyx-permissions.service velyx-launcher.service velyx-shell.service || true
+systemctl --user try-restart velyx-permissions.service velyx-launcher.service velyx-update-engine.service velyx-recovery.service velyx-shell.service || true
 
 echo "Velyx user services restarted."

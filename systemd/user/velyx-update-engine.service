@@ -5,10 +5,11 @@ After=graphical-session-pre.target dbus.service
 
 [Service]
 Type=simple
+EnvironmentFile=-%h/.config/velyx/velyx.env
 Environment=VELYX_USER_ID=%u
 Environment=HOME=%h
 ExecStart=/usr/bin/velyx-update-engine
-Restart=on-failure
+Restart=always
 RestartSec=1
 
 [Install]

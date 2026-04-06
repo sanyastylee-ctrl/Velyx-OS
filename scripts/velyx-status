@@ -7,6 +7,9 @@ if [[ -f "${ENV_FILE}" ]]; then
   source "${ENV_FILE}"
 fi
 
+STATE_DIR="${VELYX_STATE_DIR:-$HOME/.velyx}"
+STATE_FILE="${STATE_DIR}/update_state.json"
+
 unit_state() {
   local unit="$1"
   systemctl --user is-active "${unit}" 2>/dev/null || echo "down"
@@ -25,11 +28,37 @@ dbus_state() {
   fi
 }
 
+state_string() {
+  local key="$1"
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "${STATE_FILE}" | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true
+}
+
+state_bool() {
+  local key="$1"
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    printf 'false\n'
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" "${STATE_FILE}" | head -n1 | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || printf 'false\n'
+}
+
 printf 'launcher: %s (dbus=%s)\n' "$(unit_state velyx-launcher.service)" "$(dbus_state com.velyx.Launcher)"
 printf 'permissions: %s (dbus=%s)\n' "$(unit_state velyx-permissions.service)" "$(dbus_state com.velyx.Permissions)"
 printf 'session-manager: %s (dbus=%s)\n' "$(unit_state velyx-session-manager.service)" "$(dbus_state com.velyx.SessionManager)"
 printf 'shell: %s\n' "$(unit_state velyx-shell.service)"
 printf 'session-target: %s\n' "$(unit_state velyx-session.target)"
+printf 'update-engine: %s (dbus=%s)\n' "$(unit_state velyx-update-engine.service)" "$(dbus_state com.velyx.UpdateEngine)"
+printf 'recovery: %s (dbus=%s)\n' "$(unit_state velyx-recovery.service)" "$(dbus_state com.velyx.Recovery)"
+printf 'update-state: %s\n' "$(state_string update_state)"
+printf 'current-version: %s\n' "$(state_string current_version)"
+printf 'staged-version: %s\n' "$(state_string staged_version)"
+printf 'last-good-version: %s\n' "$(state_string last_good_version)"
+printf 'last-update-result: %s\n' "$(state_string last_update_result)"
+printf 'rollback-available: %s\n' "$(state_bool rollback_available)"
+printf 'recovery-needed: %s\n' "$(state_bool recovery_needed)"
 printf 'xprop: %s\n' "$(command -v xprop >/dev/null 2>&1 && echo available || echo missing)"
 printf 'wmctrl: %s\n' "$(command -v wmctrl >/dev/null 2>&1 && echo available || echo missing)"
 printf 'xdotool: %s\n' "$(command -v xdotool >/dev/null 2>&1 && echo available || echo missing)"

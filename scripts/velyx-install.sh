@@ -12,6 +12,15 @@ MANIFESTS_DIR="${PREFIX}/share/app-manifests"
 LIBEXEC_DIR="${PREFIX}/libexec"
 BIN_DIR="${PREFIX}/bin"
 ENV_FILE="${CONFIG_DIR}/velyx.env"
+MODE="full"
+
+if [[ "${1:-}" == "--payload-only" ]]; then
+  MODE="payload-only"
+  shift
+elif [[ "${1:-}" == "--units-only" ]]; then
+  MODE="units-only"
+  shift
+fi
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -75,10 +84,58 @@ render_user_unit() {
     "${source_path}" > "${target_path}"
 }
 
+determine_build_version() {
+  if [[ -n "${VELYX_BUILD_VERSION:-}" ]]; then
+    printf '%s\n' "${VELYX_BUILD_VERSION}"
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 && git -C "${ROOT_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    printf '%s\n' "$(git -C "${ROOT_DIR}" rev-parse --short HEAD)"
+    return 0
+  fi
+  printf 'unknown\n'
+}
+
+write_version_metadata() {
+  local version
+  version="$(determine_build_version)"
+  mkdir -p "${PREFIX}/share"
+  cat > "${PREFIX}/share/version.txt" <<EOF
+version=${version}
+installed_at=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+source_root=${ROOT_DIR}
+EOF
+}
+
+write_update_state() {
+  local version
+  version="$(determine_build_version)"
+  cat > "${STATE_DIR}/update_state.json" <<EOF
+{
+  "current_version": "${version}",
+  "staged_version": "",
+  "last_good_version": "${version}",
+  "update_state": "installed",
+  "last_update_result": "install_ok",
+  "rollback_available": false,
+  "recovery_needed": false,
+  "last_failed_version": "",
+  "last_recovery_result": "none",
+  "current_prefix": "${PREFIX}",
+  "staging_root": "${STATE_DIR}/updates/staged",
+  "rollback_prefix": "${STATE_DIR}/updates/last-known-good-prefix",
+  "last_update_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+}
+
 require_cmd install
 require_cmd mkdir
 require_cmd sed
-require_cmd systemctl
+
+if [[ "${MODE}" != "payload-only" ]]; then
+  require_cmd systemctl
+fi
 
 warn_optional_cmd busctl
 warn_optional_cmd xprop
@@ -87,33 +144,42 @@ warn_optional_cmd xdotool
 
 mkdir -p "${BIN_DIR}" "${LIBEXEC_DIR}" "${MANIFESTS_DIR}" "${STATE_DIR}" "${CONFIG_DIR}" "${UNIT_DIR}" "${LOCAL_BIN_DIR}"
 
-install_binary "session-manager-service" "velyx-session-manager"
-install_binary "settings-service" "velyx-settings-service"
-install_binary "permissions-service" "velyx-permissions-service"
-install_binary "launcher-service" "velyx-launcher-service"
-install_binary "diagnostics-service" "velyx-diagnostics-service"
-install_binary "ai-service" "velyx-ai-service"
-install_binary "file-service" "velyx-file-service"
-install_binary "update-engine" "velyx-update-engine"
-install_binary "recovery-service" "velyx-recovery-service"
-install_binary "installer-service" "velyx-installer-service"
+if [[ "${MODE}" != "units-only" ]]; then
+  install_binary "session-manager-service" "velyx-session-manager"
+  install_binary "settings-service" "velyx-settings-service"
+  install_binary "permissions-service" "velyx-permissions-service"
+  install_binary "launcher-service" "velyx-launcher-service"
+  install_binary "diagnostics-service" "velyx-diagnostics-service"
+  install_binary "ai-service" "velyx-ai-service"
+  install_binary "file-service" "velyx-file-service"
+  install_binary "update-engine" "velyx-update-engine"
+  install_binary "recovery-service" "velyx-recovery-service"
+  install_binary "installer-service" "velyx-installer-service"
 
-if [[ -n "${VELYX_SHELL_BINARY:-}" ]]; then
-  install -Dm755 "${VELYX_SHELL_BINARY}" "${BIN_DIR}/velyx-shell"
-elif resolve_binary_source "velyx-shell" >/dev/null 2>&1; then
-  install -Dm755 "$(resolve_binary_source "velyx-shell")" "${BIN_DIR}/velyx-shell"
-else
-  echo "missing shell binary: set VELYX_SHELL_BINARY or place velyx-shell in ${BIN_SOURCE_DIR}" >&2
-  exit 1
+  if [[ -n "${VELYX_SHELL_BINARY:-}" ]]; then
+    install -Dm755 "${VELYX_SHELL_BINARY}" "${BIN_DIR}/velyx-shell"
+  elif resolve_binary_source "velyx-shell" >/dev/null 2>&1; then
+    install -Dm755 "$(resolve_binary_source "velyx-shell")" "${BIN_DIR}/velyx-shell"
+  else
+    echo "missing shell binary: set VELYX_SHELL_BINARY or place velyx-shell in ${BIN_SOURCE_DIR}" >&2
+    exit 1
+  fi
+
+  install -Dm755 "${ROOT_DIR}/scripts/velyx-user-session-bootstrap.sh" "${LIBEXEC_DIR}/velyx-user-session-bootstrap"
+  install -Dm755 "${ROOT_DIR}/scripts/velyx-firstboot-dispatch.sh" "${LIBEXEC_DIR}/velyx-firstboot-dispatch"
+  install -Dm755 "${ROOT_DIR}/scripts/velyx-system-session-bootstrap.sh" "${LIBEXEC_DIR}/velyx-system-session-bootstrap"
+  install -Dm755 "${ROOT_DIR}/scripts/velyx-recovery-bootstrap.sh" "${LIBEXEC_DIR}/velyx-recovery-bootstrap"
+
+  cp -a "${ROOT_DIR}/app-manifests/." "${MANIFESTS_DIR}/"
+  write_version_metadata
+  if [[ "${MODE}" == "full" ]]; then
+    mkdir -p "${STATE_DIR}/updates/staged" "${STATE_DIR}/updates/failed"
+    write_update_state
+  fi
 fi
 
-install -Dm755 "${ROOT_DIR}/scripts/velyx-user-session-bootstrap.sh" "${LIBEXEC_DIR}/velyx-user-session-bootstrap"
-install -Dm755 "${ROOT_DIR}/scripts/velyx-firstboot-dispatch.sh" "${LIBEXEC_DIR}/velyx-firstboot-dispatch"
-install -Dm755 "${ROOT_DIR}/scripts/velyx-system-session-bootstrap.sh" "${LIBEXEC_DIR}/velyx-system-session-bootstrap"
-
-cp -a "${ROOT_DIR}/app-manifests/." "${MANIFESTS_DIR}/"
-
-cat > "${ENV_FILE}" <<EOF
+if [[ "${MODE}" != "payload-only" ]]; then
+  cat > "${ENV_FILE}" <<EOF
 VELYX_SESSION_MANAGER_BINARY=${BIN_DIR}/velyx-session-manager
 VELYX_SETTINGS_BINARY=${BIN_DIR}/velyx-settings-service
 VELYX_PERMISSIONS_BINARY=${BIN_DIR}/velyx-permissions-service
@@ -129,18 +195,41 @@ VELYX_INSTALL_PREFIX=${PREFIX}
 VELYX_STATE_DIR=${STATE_DIR}
 EOF
 
-for unit in "${ROOT_DIR}"/systemd/user/*; do
-  render_user_unit "${unit}" "${UNIT_DIR}/$(basename "${unit}")"
-done
+  for unit in "${ROOT_DIR}"/systemd/user/*; do
+    render_user_unit "${unit}" "${UNIT_DIR}/$(basename "${unit}")"
+  done
 
-systemctl --user daemon-reload
-systemctl --user enable velyx-session-manager.service velyx-session-bootstrap.service
-systemctl --user restart velyx-session-manager.service || true
-systemctl --user restart velyx-session-bootstrap.service || true
+  systemctl --user daemon-reload
+  systemctl --user enable velyx-session-manager.service velyx-session-bootstrap.service
+  systemctl --user restart velyx-session-manager.service || true
+  systemctl --user restart velyx-session-bootstrap.service || true
 
-install_script_binary "${ROOT_DIR}/scripts/velyx-status" "velyx-status"
-install_script_binary "${ROOT_DIR}/scripts/velyx-restart.sh" "velyx-restart.sh"
-install_script_binary "${ROOT_DIR}/scripts/velyx-logs.sh" "velyx-logs.sh"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-status" "velyx-status"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-restart.sh" "velyx-restart.sh"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-logs.sh" "velyx-logs.sh"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-update" "velyx-update"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-recovery" "velyx-recovery"
+fi
+
+if [[ "${MODE}" == "payload-only" ]]; then
+  cat <<EOF
+Velyx OS payload prepared.
+prefix: ${PREFIX}
+state:  ${STATE_DIR}
+EOF
+  exit 0
+fi
+
+if [[ "${MODE}" == "units-only" ]]; then
+  cat <<EOF
+Velyx OS units refreshed.
+prefix: ${PREFIX}
+state:  ${STATE_DIR}
+env:    ${ENV_FILE}
+units:  ${UNIT_DIR}
+EOF
+  exit 0
+fi
 
 cat <<EOF
 Velyx OS installed.

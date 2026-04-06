@@ -1,0 +1,361 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/velyx/velyx.env"
+if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+fi
+
+PREFIX="${VELYX_INSTALL_PREFIX:-$HOME/.local/share/velyx}"
+STATE_DIR="${VELYX_STATE_DIR:-$HOME/.velyx}"
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/velyx"
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+UPDATE_DIR="${STATE_DIR}/updates"
+STAGING_ROOT="${UPDATE_DIR}/staged"
+FAILED_ROOT="${UPDATE_DIR}/failed"
+ROLLBACK_PREFIX="${UPDATE_DIR}/last-known-good-prefix"
+ROLLBACK_UNIT_DIR="${UPDATE_DIR}/last-known-good-units"
+STATE_FILE="${STATE_DIR}/update_state.json"
+LOG_FILE="${STATE_DIR}/update.log"
+SOURCE_ROOT="${VELYX_UPDATE_SOURCE:-$PWD}"
+SOURCE_BIN_DIR=""
+SOURCE_SHELL_BINARY=""
+FORCE_UPDATE="false"
+
+mkdir -p "${STATE_DIR}" "${UPDATE_DIR}" "${STAGING_ROOT}" "${FAILED_ROOT}"
+
+log_event() {
+  local event="$1"
+  local status="$2"
+  local detail="${3:-}"
+  printf '%s event=%s status=%s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "${event}" "${status}" "${detail}" >> "${LOG_FILE}"
+}
+
+json_escape() {
+  local value="${1:-}"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  value="${value//$'\n'/ }"
+  printf '%s' "${value}"
+}
+
+json_get_string() {
+  local key="$1"
+  local file="${2:-$STATE_FILE}"
+  if [[ ! -f "${file}" ]]; then
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "${file}" | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true
+}
+
+json_get_bool() {
+  local key="$1"
+  local file="${2:-$STATE_FILE}"
+  if [[ ! -f "${file}" ]]; then
+    printf 'false\n'
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" "${file}" | head -n1 | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || printf 'false\n'
+}
+
+determine_source_version() {
+  if [[ -n "${VELYX_UPDATE_VERSION:-}" ]]; then
+    printf '%s\n' "${VELYX_UPDATE_VERSION}"
+    return 0
+  fi
+  if [[ -f "${SOURCE_ROOT}/share/version.txt" ]]; then
+    awk -F= '/^version=/{print $2; exit}' "${SOURCE_ROOT}/share/version.txt"
+    return 0
+  fi
+  if command -v git >/dev/null 2>&1 && git -C "${SOURCE_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git -C "${SOURCE_ROOT}" rev-parse --short HEAD
+    return 0
+  fi
+  date -u +"snapshot-%Y%m%d%H%M%S"
+}
+
+read_installed_version() {
+  if [[ -f "${PREFIX}/share/version.txt" ]]; then
+    awk -F= '/^version=/{print $2; exit}' "${PREFIX}/share/version.txt"
+    return 0
+  fi
+  json_get_string "current_version"
+}
+
+write_state() {
+  local current_version="$1"
+  local staged_version="$2"
+  local last_good_version="$3"
+  local update_state="$4"
+  local last_update_result="$5"
+  local rollback_available="$6"
+  local recovery_needed="$7"
+  local last_failed_version="$8"
+  local last_recovery_result="$9"
+  local tmp="${STATE_FILE}.tmp"
+
+  cat > "${tmp}" <<EOF
+{
+  "current_version": "$(json_escape "${current_version}")",
+  "staged_version": "$(json_escape "${staged_version}")",
+  "last_good_version": "$(json_escape "${last_good_version}")",
+  "update_state": "$(json_escape "${update_state}")",
+  "last_update_result": "$(json_escape "${last_update_result}")",
+  "rollback_available": ${rollback_available},
+  "recovery_needed": ${recovery_needed},
+  "last_failed_version": "$(json_escape "${last_failed_version}")",
+  "last_recovery_result": "$(json_escape "${last_recovery_result}")",
+  "current_prefix": "$(json_escape "${PREFIX}")",
+  "staging_root": "$(json_escape "${STAGING_ROOT}")",
+  "rollback_prefix": "$(json_escape "${ROLLBACK_PREFIX}")",
+  "last_update_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+}
+EOF
+  mv "${tmp}" "${STATE_FILE}"
+}
+
+render_runtime_units() {
+  local source_install_script="${SOURCE_ROOT}/scripts/velyx-install.sh"
+  if [[ ! -x "${source_install_script}" ]]; then
+    echo "missing install script in source: ${source_install_script}" >&2
+    return 1
+  fi
+
+  VELYX_PREFIX="${PREFIX}" \
+  VELYX_STATE_DIR="${STATE_DIR}" \
+  VELYX_BIN_DIR="${SOURCE_BIN_DIR}" \
+  VELYX_SHELL_BINARY="${SOURCE_SHELL_BINARY}" \
+  VELYX_BUILD_VERSION="${CANDIDATE_VERSION}" \
+  "${source_install_script}" --units-only >/dev/null
+}
+
+backup_runtime_units() {
+  rm -rf "${ROLLBACK_UNIT_DIR}.tmp"
+  mkdir -p "${ROLLBACK_UNIT_DIR}.tmp"
+  if compgen -G "${UNIT_DIR}/velyx*" >/dev/null; then
+    cp -a "${UNIT_DIR}"/velyx* "${ROLLBACK_UNIT_DIR}.tmp"/
+  fi
+  if [[ -f "${ENV_FILE}" ]]; then
+    cp -a "${ENV_FILE}" "${ROLLBACK_UNIT_DIR}.tmp/velyx.env"
+  fi
+  rm -rf "${ROLLBACK_UNIT_DIR}"
+  mv "${ROLLBACK_UNIT_DIR}.tmp" "${ROLLBACK_UNIT_DIR}"
+}
+
+restore_runtime_units() {
+  if [[ -d "${ROLLBACK_UNIT_DIR}" ]]; then
+    mkdir -p "${UNIT_DIR}" "${CONFIG_DIR}"
+    if compgen -G "${ROLLBACK_UNIT_DIR}/velyx*" >/dev/null; then
+      cp -a "${ROLLBACK_UNIT_DIR}"/velyx* "${UNIT_DIR}/"
+    fi
+    if [[ -f "${ROLLBACK_UNIT_DIR}/velyx.env" ]]; then
+      cp -a "${ROLLBACK_UNIT_DIR}/velyx.env" "${ENV_FILE}"
+    fi
+  fi
+}
+
+health_check() {
+  local attempts=0
+  while [[ "${attempts}" -lt 20 ]]; do
+    local launcher_state permissions_state session_state shell_state
+    launcher_state="$(systemctl --user is-active velyx-launcher.service 2>/dev/null || true)"
+    permissions_state="$(systemctl --user is-active velyx-permissions.service 2>/dev/null || true)"
+    session_state="$(systemctl --user is-active velyx-session-manager.service 2>/dev/null || true)"
+    shell_state="$(systemctl --user is-active velyx-shell.service 2>/dev/null || true)"
+
+    if [[ "${launcher_state}" == "active" && "${permissions_state}" == "active" && "${session_state}" == "active" && "${shell_state}" == "active" ]]; then
+      if command -v busctl >/dev/null 2>&1; then
+        if busctl --user list 2>/dev/null | awk '{print $1}' | grep -Fxq "com.velyx.Launcher" && \
+           busctl --user list 2>/dev/null | awk '{print $1}' | grep -Fxq "com.velyx.Permissions" && \
+           busctl --user list 2>/dev/null | awk '{print $1}' | grep -Fxq "com.velyx.SessionManager"; then
+          return 0
+        fi
+      else
+        return 0
+      fi
+    fi
+    attempts=$((attempts + 1))
+    sleep 1
+  done
+  return 1
+}
+
+perform_rollback() {
+  local failed_version="$1"
+  log_event "rollback_begin" "started" "failed_version=${failed_version}"
+  systemctl --user stop velyx-session.target >/dev/null 2>&1 || true
+  systemctl --user stop velyx-session-bootstrap.service >/dev/null 2>&1 || true
+
+  if [[ -d "${PREFIX}" ]]; then
+    rm -rf "${FAILED_ROOT}/${failed_version}"
+    mv "${PREFIX}" "${FAILED_ROOT}/${failed_version}" || true
+  fi
+
+  if [[ -d "${ROLLBACK_PREFIX}" ]]; then
+    mv "${ROLLBACK_PREFIX}" "${PREFIX}"
+    restore_runtime_units
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
+    systemctl --user restart velyx-session-manager.service >/dev/null 2>&1 || true
+    systemctl --user restart velyx-session-bootstrap.service >/dev/null 2>&1 || true
+    if health_check; then
+      CURRENT_VERSION="$(read_installed_version)"
+      rm -rf "${ROLLBACK_PREFIX}.tmp"
+      cp -a "${PREFIX}" "${ROLLBACK_PREFIX}.tmp"
+      rm -rf "${ROLLBACK_PREFIX}"
+      mv "${ROLLBACK_PREFIX}.tmp" "${ROLLBACK_PREFIX}"
+      write_state "${CURRENT_VERSION}" "" "${CURRENT_VERSION}" "rolled_back" "rollback_ok" "true" "false" "${failed_version}" "rollback_ok"
+      log_event "rollback_ok" "ok" "restored_version=${CURRENT_VERSION}"
+      return 0
+    fi
+  fi
+
+  write_state "$(read_installed_version)" "" "$(json_get_string "last_good_version")" "failed" "rollback_failed" "false" "true" "${failed_version}" "rollback_failed"
+  log_event "rollback_failed" "failed" "failed_version=${failed_version}"
+  return 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --source-root)
+      SOURCE_ROOT="$2"
+      shift 2
+      ;;
+    --bin-dir)
+      SOURCE_BIN_DIR="$2"
+      shift 2
+      ;;
+    --shell-binary)
+      SOURCE_SHELL_BINARY="$2"
+      shift 2
+      ;;
+    --force)
+      FORCE_UPDATE="true"
+      shift
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
+SOURCE_ROOT="$(cd "${SOURCE_ROOT}" && pwd)"
+SOURCE_BIN_DIR="${SOURCE_BIN_DIR:-${VELYX_UPDATE_BIN_DIR:-${SOURCE_ROOT}/target/release}}"
+SOURCE_SHELL_BINARY="${SOURCE_SHELL_BINARY:-${VELYX_UPDATE_SHELL_BINARY:-${SOURCE_BIN_DIR}/velyx-shell}}"
+CANDIDATE_VERSION="$(determine_source_version)"
+CURRENT_VERSION="$(read_installed_version)"
+LAST_GOOD_VERSION="$(json_get_string "last_good_version")"
+[[ -n "${LAST_GOOD_VERSION}" ]] || LAST_GOOD_VERSION="${CURRENT_VERSION}"
+STAGING_PREFIX="${STAGING_ROOT}/${CANDIDATE_VERSION}"
+
+if [[ "${FORCE_UPDATE}" != "true" && -n "${CURRENT_VERSION}" && "${CURRENT_VERSION}" == "${CANDIDATE_VERSION}" ]]; then
+  echo "candidate version matches current version (${CURRENT_VERSION}); use --force to reapply" >&2
+  exit 1
+fi
+
+if [[ ! -d "${SOURCE_ROOT}" ]]; then
+  echo "missing source root: ${SOURCE_ROOT}" >&2
+  exit 1
+fi
+
+if [[ ! -x "${SOURCE_ROOT}/scripts/velyx-install.sh" ]]; then
+  echo "source root does not contain scripts/velyx-install.sh" >&2
+  exit 1
+fi
+
+if [[ ! -d "${SOURCE_BIN_DIR}" ]]; then
+  echo "missing source bin dir: ${SOURCE_BIN_DIR}" >&2
+  exit 1
+fi
+
+if [[ ! -f "${SOURCE_SHELL_BINARY}" ]]; then
+  echo "missing shell binary: ${SOURCE_SHELL_BINARY}" >&2
+  exit 1
+fi
+
+log_event "update_begin" "started" "current_version=${CURRENT_VERSION} candidate_version=${CANDIDATE_VERSION}"
+write_state "${CURRENT_VERSION}" "${CANDIDATE_VERSION}" "${LAST_GOOD_VERSION}" "preparing" "update_begin" "$( [[ -d "${ROLLBACK_PREFIX}" ]] && echo true || echo false )" "false" "$(json_get_string "last_failed_version")" "$(json_get_string "last_recovery_result")"
+
+rm -rf "${STAGING_PREFIX}"
+log_event "update_payload_prepared" "started" "staging_prefix=${STAGING_PREFIX}"
+VELYX_PREFIX="${STAGING_PREFIX}" \
+VELYX_STATE_DIR="${STATE_DIR}" \
+VELYX_BIN_DIR="${SOURCE_BIN_DIR}" \
+VELYX_SHELL_BINARY="${SOURCE_SHELL_BINARY}" \
+VELYX_BUILD_VERSION="${CANDIDATE_VERSION}" \
+"${SOURCE_ROOT}/scripts/velyx-install.sh" --payload-only >/dev/null
+log_event "update_payload_prepared" "ok" "candidate_version=${CANDIDATE_VERSION}"
+
+log_event "update_validation_begin" "started" "candidate_version=${CANDIDATE_VERSION}"
+for required in \
+  "${STAGING_PREFIX}/bin/velyx-session-manager" \
+  "${STAGING_PREFIX}/bin/velyx-permissions-service" \
+  "${STAGING_PREFIX}/bin/velyx-launcher-service" \
+  "${STAGING_PREFIX}/bin/velyx-update-engine" \
+  "${STAGING_PREFIX}/bin/velyx-recovery-service" \
+  "${STAGING_PREFIX}/bin/velyx-shell" \
+  "${STAGING_PREFIX}/libexec/velyx-user-session-bootstrap" \
+  "${STAGING_PREFIX}/libexec/velyx-recovery-bootstrap" \
+  "${STAGING_PREFIX}/share/version.txt"
+do
+  if [[ ! -e "${required}" ]]; then
+    log_event "update_validation_failed" "failed" "missing=${required}"
+    write_state "${CURRENT_VERSION}" "${CANDIDATE_VERSION}" "${LAST_GOOD_VERSION}" "failed" "payload_invalid" "$( [[ -d "${ROLLBACK_PREFIX}" ]] && echo true || echo false )" "false" "${CANDIDATE_VERSION}" "$(json_get_string "last_recovery_result")"
+    echo "payload validation failed: missing ${required}" >&2
+    exit 1
+  fi
+done
+
+if [[ ! -d "${SOURCE_ROOT}/systemd/user" ]] || [[ -z "$(find "${SOURCE_ROOT}/systemd/user" -maxdepth 1 -type f 2>/dev/null)" ]]; then
+  log_event "update_validation_failed" "failed" "missing_systemd_user_templates=true"
+  write_state "${CURRENT_VERSION}" "${CANDIDATE_VERSION}" "${LAST_GOOD_VERSION}" "failed" "payload_invalid" "$( [[ -d "${ROLLBACK_PREFIX}" ]] && echo true || echo false )" "false" "${CANDIDATE_VERSION}" "$(json_get_string "last_recovery_result")"
+  echo "payload validation failed: systemd/user templates missing" >&2
+  exit 1
+fi
+
+log_event "update_validation_ok" "ok" "candidate_version=${CANDIDATE_VERSION}"
+write_state "${CURRENT_VERSION}" "${CANDIDATE_VERSION}" "${LAST_GOOD_VERSION}" "validated" "update_validation_ok" "$( [[ -d "${ROLLBACK_PREFIX}" ]] && echo true || echo false )" "false" "$(json_get_string "last_failed_version")" "$(json_get_string "last_recovery_result")"
+
+log_event "update_apply_begin" "started" "candidate_version=${CANDIDATE_VERSION}"
+backup_runtime_units
+systemctl --user stop velyx-session.target >/dev/null 2>&1 || true
+systemctl --user stop velyx-session-bootstrap.service >/dev/null 2>&1 || true
+
+rm -rf "${ROLLBACK_PREFIX}"
+if [[ -d "${PREFIX}" ]]; then
+  mv "${PREFIX}" "${ROLLBACK_PREFIX}"
+fi
+if ! mv "${STAGING_PREFIX}" "${PREFIX}"; then
+  if [[ -d "${ROLLBACK_PREFIX}" ]]; then
+    mv "${ROLLBACK_PREFIX}" "${PREFIX}" || true
+  fi
+  log_event "update_apply_failed" "failed" "candidate_version=${CANDIDATE_VERSION}"
+  write_state "${CURRENT_VERSION}" "" "${LAST_GOOD_VERSION}" "failed" "update_apply_failed" "true" "true" "${CANDIDATE_VERSION}" "$(json_get_string "last_recovery_result")"
+  exit 1
+fi
+
+if ! render_runtime_units; then
+  log_event "update_apply_failed" "failed" "units_refresh_failed=true"
+  perform_rollback "${CANDIDATE_VERSION}" || true
+  exit 1
+fi
+log_event "update_apply_ok" "ok" "candidate_version=${CANDIDATE_VERSION}"
+
+log_event "update_healthcheck_begin" "started" "candidate_version=${CANDIDATE_VERSION}"
+if health_check; then
+  CURRENT_VERSION="${CANDIDATE_VERSION}"
+  log_event "update_healthcheck_ok" "ok" "candidate_version=${CANDIDATE_VERSION}"
+  rm -rf "${ROLLBACK_PREFIX}.tmp"
+  cp -a "${PREFIX}" "${ROLLBACK_PREFIX}.tmp"
+  rm -rf "${ROLLBACK_PREFIX}"
+  mv "${ROLLBACK_PREFIX}.tmp" "${ROLLBACK_PREFIX}"
+  backup_runtime_units
+  write_state "${CURRENT_VERSION}" "" "${CURRENT_VERSION}" "committed" "update_committed" "true" "false" "$(json_get_string "last_failed_version")" "none"
+  echo "Velyx update applied successfully: ${CURRENT_VERSION}"
+  exit 0
+fi
+
+log_event "update_healthcheck_failed" "failed" "candidate_version=${CANDIDATE_VERSION}"
+write_state "${CURRENT_VERSION}" "" "${LAST_GOOD_VERSION}" "failed" "update_healthcheck_failed" "true" "true" "${CANDIDATE_VERSION}" "$(json_get_string "last_recovery_result")"
+perform_rollback "${CANDIDATE_VERSION}"
