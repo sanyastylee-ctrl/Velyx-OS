@@ -5,6 +5,7 @@ Requires=velyx-session-manager.service
 
 [Service]
 Type=oneshot
+EnvironmentFile=-%h/.config/velyx/velyx.env
 Environment=VELYX_USER_ID=%u
 Environment=HOME=%h
 ExecStart=/usr/lib/velyx/boot/velyx-user-session-bootstrap %u

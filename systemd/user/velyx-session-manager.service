@@ -4,10 +4,11 @@ After=dbus.service
 
 [Service]
 Type=simple
+EnvironmentFile=-%h/.config/velyx/velyx.env
 Environment=VELYX_USER_ID=%u
 Environment=HOME=%h
 ExecStart=/usr/bin/velyx-session-manager
-Restart=on-failure
+Restart=always
 RestartSec=1
 
 [Install]

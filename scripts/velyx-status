@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/velyx/velyx.env"
+if [[ -f "${ENV_FILE}" ]]; then
+  # shellcheck disable=SC1090
+  source "${ENV_FILE}"
+fi
+
+unit_state() {
+  local unit="$1"
+  systemctl --user is-active "${unit}" 2>/dev/null || echo "down"
+}
+
+dbus_state() {
+  local name="$1"
+  if ! command -v busctl >/dev/null 2>&1; then
+    echo "busctl-missing"
+    return
+  fi
+  if busctl --user list 2>/dev/null | awk '{print $1}' | grep -Fxq "${name}"; then
+    echo "available"
+  else
+    echo "missing"
+  fi
+}
+
+printf 'launcher: %s (dbus=%s)\n' "$(unit_state velyx-launcher.service)" "$(dbus_state com.velyx.Launcher)"
+printf 'permissions: %s (dbus=%s)\n' "$(unit_state velyx-permissions.service)" "$(dbus_state com.velyx.Permissions)"
+printf 'session-manager: %s (dbus=%s)\n' "$(unit_state velyx-session-manager.service)" "$(dbus_state com.velyx.SessionManager)"
+printf 'shell: %s\n' "$(unit_state velyx-shell.service)"
+printf 'session-target: %s\n' "$(unit_state velyx-session.target)"
+printf 'xprop: %s\n' "$(command -v xprop >/dev/null 2>&1 && echo available || echo missing)"
+printf 'wmctrl: %s\n' "$(command -v wmctrl >/dev/null 2>&1 && echo available || echo missing)"
+printf 'xdotool: %s\n' "$(command -v xdotool >/dev/null 2>&1 && echo available || echo missing)"

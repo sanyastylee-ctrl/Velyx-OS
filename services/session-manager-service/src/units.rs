@@ -34,7 +34,7 @@ fn service_unit(
         startup_order,
         restart_policy: restart_policy.to_string(),
         contents: format!(
-            "[Unit]\nDescription={description}\nPartOf=velyx-session.target\nAfter=graphical-session-pre.target dbus.service\n\n[Service]\nType=simple\nEnvironment=VELYX_USER_ID=%u\nEnvironment=HOME=%h\nExecStart={exec_start}\nRestart={restart_policy}\nRestartSec=1\n\n[Install]\nWantedBy={wanted_by}\n"
+            "[Unit]\nDescription={description}\nPartOf=velyx-session.target\nAfter=graphical-session-pre.target dbus.service\n\n[Service]\nType=simple\nEnvironmentFile=-%h/.config/velyx/velyx.env\nEnvironment=VELYX_USER_ID=%u\nEnvironment=HOME=%h\nExecStart={exec_start}\nRestart={restart_policy}\nRestartSec=1\n\n[Install]\nWantedBy={wanted_by}\n"
         ),
     }
 }
@@ -59,7 +59,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "com.velyx.Settings",
             false,
             10,
-            "on-failure",
+            "always",
             &env_exec("VELYX_SETTINGS_BINARY", "/usr/bin/velyx-settings-service"),
             "velyx-session.target",
         ),
@@ -69,7 +69,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "com.velyx.Permissions",
             true,
             20,
-            "on-failure",
+            "always",
             &env_exec(
                 "VELYX_PERMISSIONS_BINARY",
                 "/usr/bin/velyx-permissions-service",
@@ -82,7 +82,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "com.velyx.Launcher",
             true,
             30,
-            "on-failure",
+            "always",
             &env_exec("VELYX_LAUNCHER_BINARY", "/usr/bin/velyx-launcher-service"),
             "velyx-session.target",
         ),
@@ -92,7 +92,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "com.velyx.Diagnostics",
             false,
             40,
-            "on-failure",
+            "always",
             &env_exec(
                 "VELYX_DIAGNOSTICS_BINARY",
                 "/usr/bin/velyx-diagnostics-service",
@@ -105,7 +105,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "com.velyx.FileService",
             false,
             45,
-            "on-failure",
+            "always",
             &env_exec("VELYX_FILE_BINARY", "/usr/bin/velyx-file-service"),
             "velyx-session.target",
         ),
@@ -115,7 +115,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "com.velyx.AI",
             false,
             50,
-            "on-failure",
+            "always",
             &env_exec("VELYX_AI_BINARY", "/usr/bin/velyx-ai-service"),
             "velyx-session.target",
         ),
@@ -125,7 +125,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "com.velyx.UpdateEngine",
             false,
             55,
-            "on-failure",
+            "always",
             &env_exec("VELYX_UPDATE_ENGINE_BINARY", "/usr/bin/velyx-update-engine"),
             "velyx-session.target",
         ),
@@ -135,7 +135,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             "com.velyx.Recovery",
             false,
             56,
-            "on-failure",
+            "always",
             &env_exec("VELYX_RECOVERY_BINARY", "/usr/bin/velyx-recovery-service"),
             "velyx-session.target",
         ),
@@ -152,7 +152,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
     ];
     if let Some(shell) = units.iter_mut().find(|unit| unit.unit_name == "velyx-shell.service") {
         shell.contents = format!(
-            "[Unit]\nDescription=Velyx OS Shell\nPartOf=velyx-session.target\nAfter=velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service\nRequires=velyx-permissions.service velyx-launcher.service\nWants=velyx-settings.service\nAfter=velyx-settings.service\n\n[Service]\nType=simple\nEnvironment=VELYX_USER_ID=%u\nEnvironment=HOME=%h\nExecStart={}\nRestart=always\nRestartSec=1\n\n[Install]\nWantedBy=velyx-session.target\n",
+            "[Unit]\nDescription=Velyx OS Shell\nPartOf=velyx-session.target\nAfter=velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service\nRequires=velyx-permissions.service velyx-launcher.service\nWants=velyx-settings.service\nAfter=velyx-settings.service\n\n[Service]\nType=simple\nEnvironmentFile=-%h/.config/velyx/velyx.env\nEnvironment=VELYX_USER_ID=%u\nEnvironment=HOME=%h\nExecStart={}\nRestart=always\nRestartSec=1\n\n[Install]\nWantedBy=velyx-session.target\n",
             env_exec("VELYX_SHELL_BINARY", "/usr/bin/velyx-shell")
         );
     }
