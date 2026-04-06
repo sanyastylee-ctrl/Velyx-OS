@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV_FILE_VALUES = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV_FILE_VALUES.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+INTENTS_REGISTRY = Path(
+    os.environ.get("VELYX_INTENTS_REGISTRY")
+    or ENV_FILE_VALUES.get("VELYX_INTENTS_REGISTRY")
+    or (STATE_DIR / "intents_registry.json")
+)
+INTENTS_LOG = STATE_DIR / "intents.log"
+INTENT_STATE = STATE_DIR / "intent_state.json"
+SPACES_REGISTRY = Path(
+    os.environ.get("VELYX_SPACES_REGISTRY")
+    or ENV_FILE_VALUES.get("VELYX_SPACES_REGISTRY")
+    or (STATE_DIR / "spaces_registry.json")
+)
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with INTENTS_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def default_registry() -> dict:
+    timestamp = now_iso()
+    return {
+        "intents": [
+            {
+                "intent_id": "dev_start",
+                "display_name": "Start Development",
+                "description": "Switch to development context and prepare core apps.",
+                "target_space": "development",
+                "actions": [],
+                "auto_focus": True,
+                "ensure_apps": True,
+                "restart_policy": "space_default",
+                "status": "enabled",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "source": "system",
+            },
+            {
+                "intent_id": "safe_browse",
+                "display_name": "Safe Browse",
+                "description": "Switch to the safer browsing context.",
+                "target_space": "safe-web",
+                "actions": [],
+                "auto_focus": True,
+                "ensure_apps": True,
+                "restart_policy": "space_default",
+                "status": "enabled",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "source": "system",
+            },
+            {
+                "intent_id": "general_use",
+                "display_name": "General Use",
+                "description": "Return to the default general workspace.",
+                "target_space": "general",
+                "actions": [],
+                "auto_focus": True,
+                "ensure_apps": True,
+                "restart_policy": "space_default",
+                "status": "enabled",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "source": "system",
+            },
+            {
+                "intent_id": "recovery_mode",
+                "display_name": "Recovery Mode",
+                "description": "Switch to the diagnostic and recovery context.",
+                "target_space": "recovery",
+                "actions": [],
+                "auto_focus": False,
+                "ensure_apps": True,
+                "restart_policy": "space_default",
+                "status": "enabled",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+                "source": "system",
+            },
+        ]
+    }
+
+
+def default_state() -> dict:
+    return {
+        "last_intent_id": "",
+        "last_result": "none",
+        "last_space_id": "",
+        "last_run_at": "",
+        "last_message": "",
+    }
+
+
+def ensure_registry_seeded(force: bool = False) -> dict:
+    if INTENTS_REGISTRY.exists() and not force:
+        try:
+            registry = json.loads(INTENTS_REGISTRY.read_text(encoding="utf-8"))
+            if registry.get("intents"):
+                return registry
+        except Exception:
+            pass
+    registry = default_registry()
+    save_json(INTENTS_REGISTRY, registry)
+    log_event("intent_registry_seeded", "ok", f"count={len(registry['intents'])}")
+    return registry
+
+
+def load_registry() -> dict:
+    return ensure_registry_seeded(force=False)
+
+
+def load_state() -> dict:
+    if INTENT_STATE.exists():
+        try:
+            return json.loads(INTENT_STATE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return default_state()
+
+
+def save_state(intent_id: str, result: str, space_id: str, message: str) -> None:
+    payload = {
+        "last_intent_id": intent_id,
+        "last_result": result,
+        "last_space_id": space_id,
+        "last_run_at": now_iso(),
+        "last_message": message,
+    }
+    save_json(INTENT_STATE, payload)
+
+
+def find_intent(registry: dict, intent_id: str):
+    for intent in registry.get("intents", []):
+        if intent.get("intent_id") == intent_id:
+            return intent
+    return None
+
+
+def has_space(space_id: str) -> bool:
+    if not SPACES_REGISTRY.exists():
+        return False
+    try:
+        payload = json.loads(SPACES_REGISTRY.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    for space in payload.get("spaces", []):
+        if space.get("space_id") == space_id:
+            return True
+    return False
+
+
+def try_busctl(*args: str) -> subprocess.CompletedProcess:
+    if shutil.which("busctl") is None:
+        raise RuntimeError("busctl_unavailable")
+    return subprocess.run(["busctl", "--user", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def activate_space(space_id: str) -> bool:
+    try:
+        result = try_busctl(
+            "call",
+            "com.velyx.SessionManager",
+            "/com/velyx/SessionManager",
+            "com.velyx.SessionManager1",
+            "ActivateSpace",
+            "s",
+            space_id,
+        )
+        return result.returncode == 0
+    except RuntimeError:
+        return False
+
+
+def session_payload() -> dict:
+    try:
+        result = try_busctl(
+            "call",
+            "com.velyx.SessionManager",
+            "/com/velyx/SessionManager",
+            "com.velyx.SessionManager1",
+            "GetSessionState",
+        )
+    except RuntimeError:
+        return {}
+    if result.returncode != 0:
+        return {}
+    raw = result.stdout.strip()
+    return {"raw": raw}
+
+
+def fallback_activate(space_id: str) -> bool:
+    space_cli = shutil.which("velyx-space")
+    if not space_cli:
+        return False
+    result = subprocess.run([space_cli, "activate", space_id], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return result.returncode == 0
+
+
+def cmd_list() -> int:
+    registry = load_registry()
+    state = load_state()
+    for intent in registry.get("intents", []):
+        marker = "*" if intent.get("intent_id") == state.get("last_intent_id") else "-"
+        print(
+            f"{marker}\t{intent.get('intent_id')}\t{intent.get('target_space')}\t"
+            f"{intent.get('status', 'enabled')}\t{intent.get('display_name', '')}"
+        )
+    return 0
+
+
+def cmd_info(intent_id: str) -> int:
+    registry = load_registry()
+    intent = find_intent(registry, intent_id)
+    if not intent:
+        print(f"intent not found: {intent_id}", file=sys.stderr)
+        return 1
+    print(json.dumps(intent, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_current() -> int:
+    print(json.dumps(load_state(), ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_run(intent_id: str) -> int:
+    registry = load_registry()
+    intent = find_intent(registry, intent_id)
+    if not intent:
+        log_event("intent_invalid", "failed", f"intent_id={intent_id} reason=not_found")
+        save_state(intent_id, "failed", "", "intent_not_found")
+        print(f"intent not found: {intent_id}", file=sys.stderr)
+        return 1
+    if intent.get("status") != "enabled":
+        log_event("intent_invalid", "failed", f"intent_id={intent_id} reason=disabled")
+        save_state(intent_id, "failed", intent.get("target_space", ""), "intent_disabled")
+        print(f"intent disabled: {intent_id}", file=sys.stderr)
+        return 1
+
+    space_id = intent.get("target_space", "")
+    if not space_id or not has_space(space_id):
+        log_event("intent_run_failed", "failed", f"intent_id={intent_id} reason=missing_target_space space_id={space_id}")
+        save_state(intent_id, "failed", space_id, "missing_target_space")
+        print(f"target space missing: {space_id}", file=sys.stderr)
+        return 1
+
+    log_event("intent_run_begin", "started", f"intent_id={intent_id} space_id={space_id}")
+    activated = activate_space(space_id)
+    if not activated:
+        activated = fallback_activate(space_id)
+    if not activated:
+        log_event("intent_run_failed", "failed", f"intent_id={intent_id} reason=space_switch_failed space_id={space_id}")
+        save_state(intent_id, "failed", space_id, "space_switch_failed")
+        print(f"failed to activate target space: {space_id}", file=sys.stderr)
+        return 1
+
+    log_event("intent_space_switch", "ok", f"intent_id={intent_id} space_id={space_id}")
+
+    result = "success"
+    message = "intent_applied"
+    if intent.get("ensure_apps", False):
+        payload = session_payload()
+        raw = payload.get("raw", "")
+        if "active_space_state" in raw and "failed" in raw:
+            result = "degraded"
+            message = "space_failed_after_switch"
+        elif "active_space_state" in raw and "degraded" in raw:
+            result = "success_with_warnings"
+            message = "space_degraded_after_switch"
+
+    save_state(intent_id, result, space_id, message)
+    log_event("intent_run_ok", "ok", f"intent_id={intent_id} result={result} space_id={space_id}")
+    print(f"intent {intent_id} -> {space_id} ({result})")
+    return 0
+
+
+def usage() -> int:
+    print(
+        "usage: velyx-intent list | info <intent_id> | run <intent_id> | current | seed-defaults",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return usage()
+
+    command = sys.argv[1]
+    if command == "list":
+        return cmd_list()
+    if command == "info" and len(sys.argv) == 3:
+        return cmd_info(sys.argv[2])
+    if command == "run" and len(sys.argv) == 3:
+        return cmd_run(sys.argv[2])
+    if command == "current":
+        return cmd_current()
+    if command == "seed-defaults":
+        ensure_registry_seeded(force=False)
+        if not INTENT_STATE.exists():
+            save_json(INTENT_STATE, default_state())
+        print(f"intents registry ready: {INTENTS_REGISTRY}")
+        return 0
+    return usage()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

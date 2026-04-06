@@ -204,6 +204,9 @@ perform_rollback() {
     if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-space" ]]; then
       "${PREFIX}/bin/velyx-space" seed-defaults >/dev/null || true
     fi
+    if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-intent" ]]; then
+      "${PREFIX}/bin/velyx-intent" seed-defaults >/dev/null || true
+    fi
     if health_check; then
       CURRENT_VERSION="$(read_installed_version)"
       rm -rf "${ROLLBACK_PREFIX}.tmp"
@@ -302,6 +305,7 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-recovery-service" \
   "${STAGING_PREFIX}/bin/velyx-app" \
   "${STAGING_PREFIX}/bin/velyx-space" \
+  "${STAGING_PREFIX}/bin/velyx-intent" \
   "${STAGING_PREFIX}/bin/velyx-shell" \
   "${STAGING_PREFIX}/libexec/velyx-user-session-bootstrap" \
   "${STAGING_PREFIX}/libexec/velyx-recovery-bootstrap" \
@@ -353,6 +357,9 @@ if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-app" ]]; the
 fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-space" ]]; then
   "${PREFIX}/bin/velyx-space" seed-defaults >/dev/null || true
+fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-intent" ]]; then
+  "${PREFIX}/bin/velyx-intent" seed-defaults >/dev/null || true
 fi
 log_event "update_apply_ok" "ok" "candidate_version=${CANDIDATE_VERSION}"
 

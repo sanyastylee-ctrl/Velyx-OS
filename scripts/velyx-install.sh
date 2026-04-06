@@ -183,6 +183,7 @@ if [[ "${MODE}" != "units-only" ]]; then
   install_helper_script "${ROOT_DIR}/scripts/velyx-recovery" "velyx-recovery"
   install_helper_script "${ROOT_DIR}/scripts/velyx-app" "velyx-app"
   install_helper_script "${ROOT_DIR}/scripts/velyx-space" "velyx-space"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-intent" "velyx-intent"
 
   cp -a "${ROOT_DIR}/app-manifests/." "${MANIFESTS_DIR}/"
   write_version_metadata
@@ -210,6 +211,7 @@ VELYX_STATE_DIR=${STATE_DIR}
 VELYX_APP_REGISTRY=${STATE_DIR}/apps_registry.json
 VELYX_USER_APPS_DIR=${STATE_DIR}/apps
 VELYX_SPACES_REGISTRY=${STATE_DIR}/spaces_registry.json
+VELYX_INTENTS_REGISTRY=${STATE_DIR}/intents_registry.json
 EOF
 
   for unit in "${ROOT_DIR}"/systemd/user/*; do
@@ -228,9 +230,11 @@ EOF
   install_script_binary "${ROOT_DIR}/scripts/velyx-recovery" "velyx-recovery"
   install_script_binary "${ROOT_DIR}/scripts/velyx-app" "velyx-app"
   install_script_binary "${ROOT_DIR}/scripts/velyx-space" "velyx-space"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-intent" "velyx-intent"
   if command -v python3 >/dev/null 2>&1; then
     "${BIN_DIR}/velyx-app" sync-system >/dev/null || true
     "${BIN_DIR}/velyx-space" seed-defaults >/dev/null || true
+    "${BIN_DIR}/velyx-intent" seed-defaults >/dev/null || true
   fi
 fi
 

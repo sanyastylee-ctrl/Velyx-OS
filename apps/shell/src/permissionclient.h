@@ -13,6 +13,7 @@ class PermissionClient : public QObject
     Q_PROPERTY(QVariantList apps READ apps NOTIFY appsChanged)
     Q_PROPERTY(QVariantList openApps READ openApps NOTIFY openAppsChanged)
     Q_PROPERTY(QVariantList spaces READ spaces NOTIFY spacesChanged)
+    Q_PROPERTY(QVariantList intents READ intents NOTIFY intentsChanged)
     Q_PROPERTY(QVariantMap selectedAppInfo READ selectedAppInfo NOTIFY selectedAppInfoChanged)
     Q_PROPERTY(QString selectedAppId READ selectedAppId NOTIFY selectedAppInfoChanged)
     Q_PROPERTY(QString activeAppId READ activeAppId NOTIFY activeAppChanged)
@@ -37,6 +38,8 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString updateState READ updateState NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString lastUpdateResult READ lastUpdateResult NOTIFY runtimeStatusChanged)
     Q_PROPERTY(bool recoveryNeeded READ recoveryNeeded NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString lastIntentId READ lastIntentId NOTIFY intentsChanged)
+    Q_PROPERTY(QString lastIntentResult READ lastIntentResult NOTIFY intentsChanged)
     Q_PROPERTY(QString activeSpaceId READ activeSpaceId NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceName READ activeSpaceName NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceState READ activeSpaceState NOTIFY spacesChanged)
@@ -49,6 +52,7 @@ public:
     Q_INVOKABLE void refreshApps();
     Q_INVOKABLE void refreshOpenApps();
     Q_INVOKABLE void refreshSpaces();
+    Q_INVOKABLE void refreshIntents();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
     Q_INVOKABLE void selectActiveApp(const QString &appId);
@@ -69,11 +73,13 @@ public:
     Q_INVOKABLE void restartActiveInstance();
     Q_INVOKABLE void activateAppByIndex(int index);
     Q_INVOKABLE void activateSpace(const QString &spaceId);
+    Q_INVOKABLE void runIntent(const QString &intentId);
     void setInputControlMode(const QString &mode, const QString &details);
 
     QVariantList apps() const;
     QVariantList openApps() const;
     QVariantList spaces() const;
+    QVariantList intents() const;
     QVariantMap selectedAppInfo() const;
     QString selectedAppId() const;
     QString activeAppId() const;
@@ -98,6 +104,8 @@ public:
     QString updateState() const;
     QString lastUpdateResult() const;
     bool recoveryNeeded() const;
+    QString lastIntentId() const;
+    QString lastIntentResult() const;
     QString activeSpaceId() const;
     QString activeSpaceName() const;
     QString activeSpaceState() const;
@@ -114,6 +122,7 @@ signals:
     void appsChanged();
     void openAppsChanged();
     void spacesChanged();
+    void intentsChanged();
     void selectedAppInfoChanged();
     void launchStatusChanged();
     void launchResultMessageChanged();
@@ -148,6 +157,7 @@ private:
     QVariantList m_apps;
     QVariantList m_openApps;
     QVariantList m_spaces;
+    QVariantList m_intents;
     QVariantMap m_sessionApps;
     QVariantMap m_selectedAppInfo;
     QString m_activeAppId;
@@ -176,6 +186,8 @@ private:
     QString m_updateState {"unknown"};
     QString m_lastUpdateResult;
     bool m_recoveryNeeded {false};
+    QString m_lastIntentId;
+    QString m_lastIntentResult;
     QString m_activeSpaceId;
     QString m_activeSpaceName;
     QString m_activeSpaceState {"unknown"};

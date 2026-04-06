@@ -265,8 +265,63 @@ ApplicationWindow {
                             onClicked: {
                                 permissionClient.refreshRuntimeStatus()
                                 permissionClient.refreshSpaces()
+                                permissionClient.refreshIntents()
                                 permissionClient.refreshOpenApps()
                                 permissionClient.refreshApps()
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            radius: 18
+                            color: "#141c29"
+                            border.width: 1
+                            border.color: Qt.rgba(1, 1, 1, 0.08)
+                            implicitHeight: 150
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 14
+                                spacing: 10
+
+                                Label {
+                                    text: "Intents"
+                                    color: "#f3f6fb"
+                                    font.pixelSize: 16
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Label {
+                                    text: permissionClient.lastIntentId.length > 0
+                                        ? "Last: " + permissionClient.lastIntentId + " • " + permissionClient.lastIntentResult
+                                        : "Run a higher-level action to switch context."
+                                    color: "#8f99ad"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    clip: true
+
+                                    Column {
+                                        width: parent.width
+                                        spacing: 10
+
+                                        Repeater {
+                                            model: permissionClient.intents
+
+                                            delegate: IntentCard {
+                                                width: parent.width
+                                                intent: modelData
+                                                lastIntentId: permissionClient.lastIntentId
+                                                lastIntentResult: permissionClient.lastIntentResult
+                                                onRunRequested: permissionClient.runIntent(intentId)
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
 

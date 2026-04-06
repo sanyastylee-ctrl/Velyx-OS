@@ -36,7 +36,10 @@ for file in \
   "${STATE_DIR}/app_registry.log" \
   "${STATE_DIR}/apps_registry.json" \
   "${STATE_DIR}/spaces.log" \
-  "${STATE_DIR}/spaces_registry.json"
+  "${STATE_DIR}/spaces_registry.json" \
+  "${STATE_DIR}/intents.log" \
+  "${STATE_DIR}/intents_registry.json" \
+  "${STATE_DIR}/intent_state.json"
 do
   if [[ -f "${file}" ]]; then
     echo "-- ${file} --"

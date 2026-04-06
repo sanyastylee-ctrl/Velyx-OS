@@ -5,6 +5,7 @@
 #include <QDBusMessage>
 #include <QDBusReply>
 #include <QDateTime>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QDir>
@@ -91,6 +92,11 @@ QVariantList PermissionClient::openApps() const
 QVariantList PermissionClient::spaces() const
 {
     return m_spaces;
+}
+
+QVariantList PermissionClient::intents() const
+{
+    return m_intents;
 }
 
 QVariantMap PermissionClient::selectedAppInfo() const
@@ -213,6 +219,16 @@ bool PermissionClient::recoveryNeeded() const
     return m_recoveryNeeded;
 }
 
+QString PermissionClient::lastIntentId() const
+{
+    return m_lastIntentId;
+}
+
+QString PermissionClient::lastIntentResult() const
+{
+    return m_lastIntentResult;
+}
+
 QString PermissionClient::activeSpaceId() const
 {
     return m_activeSpaceId;
@@ -258,6 +274,7 @@ void PermissionClient::refreshApps()
 {
     refreshRuntimeStatus();
     refreshSpaces();
+    refreshIntents();
 
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     if (!launcher.isValid()) {
@@ -337,6 +354,55 @@ void PermissionClient::refreshSpaces()
     if (m_spaces != spaces) {
         m_spaces = spaces;
         emit spacesChanged();
+    }
+}
+
+void PermissionClient::refreshIntents()
+{
+    const QString intentsRegistryPath = QDir::home().filePath(".velyx/intents_registry.json");
+    const QString intentStatePath = QDir::home().filePath(".velyx/intent_state.json");
+
+    QVariantList intents;
+    QFile registryFile(intentsRegistryPath);
+    if (registryFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(registryFile.readAll());
+        if (document.isObject()) {
+            const QJsonArray entries = document.object().value("intents").toArray();
+            for (const QJsonValue &entry : entries) {
+                if (entry.isObject()) {
+                    intents.push_back(entry.toObject().toVariantMap());
+                }
+            }
+        }
+    }
+
+    QString lastIntentId;
+    QString lastIntentResult;
+    QFile stateFile(intentStatePath);
+    if (stateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            lastIntentId = object.value("last_intent_id").toString();
+            lastIntentResult = object.value("last_result").toString();
+        }
+    }
+
+    bool changed = false;
+    if (m_intents != intents) {
+        m_intents = intents;
+        changed = true;
+    }
+    if (m_lastIntentId != lastIntentId) {
+        m_lastIntentId = lastIntentId;
+        changed = true;
+    }
+    if (m_lastIntentResult != lastIntentResult) {
+        m_lastIntentResult = lastIntentResult;
+        changed = true;
+    }
+    if (changed) {
+        emit intentsChanged();
     }
 }
 
@@ -583,6 +649,7 @@ void PermissionClient::refreshRuntimeStatus()
     if (changed) {
         emit runtimeStatusChanged();
         emit spacesChanged();
+        refreshIntents();
     }
 }
 
@@ -758,6 +825,51 @@ void PermissionClient::activateSpace(const QString &spaceId)
             return;
         }
     }
+}
+
+void PermissionClient::runIntent(const QString &intentId)
+{
+    if (intentId.isEmpty()) {
+        return;
+    }
+
+    QString output;
+    QProcess process;
+    process.start("velyx-intent", { "run", intentId });
+    if (process.waitForStarted(400) && process.waitForFinished(3000)) {
+        output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? QString("Intent %1 выполнен").arg(intentId) : output);
+            updateStatusDetails("intent_run", "ok", intentId, "space_ready");
+            refreshRuntimeStatus();
+            refreshSpaces();
+            refreshIntents();
+            refreshApps();
+            refreshOpenApps();
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? QString("Не удалось выполнить intent %1").arg(intentId) : errorOutput);
+        updateStatusDetails("intent_run", "failed", intentId, "retry");
+        refreshIntents();
+        return;
+    }
+
+    for (const QVariant &entry : std::as_const(m_intents)) {
+        const QVariantMap intent = entry.toMap();
+        if (intent.value("intent_id").toString() == intentId) {
+            const QString spaceId = intent.value("target_space").toString();
+            if (!spaceId.isEmpty()) {
+                activateSpace(spaceId);
+                updateStatusDetails("intent_run", "fallback", intentId, "space_activate");
+                updateLaunchState("ok", QString("Intent %1 переведён в activateSpace(%2)").arg(intentId, spaceId));
+                return;
+            }
+        }
+    }
+
+    updateLaunchState("error", QString("Intent %1 недоступен").arg(intentId));
+    updateStatusDetails("intent_run", "failed", intentId, "retry");
 }
 
 void PermissionClient::launchSelectedApp()
