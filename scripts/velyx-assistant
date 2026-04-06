@@ -428,6 +428,12 @@ class ToolDispatcher:
             timeout=timeout,
         )
 
+    def _run_ai_text_task(self, task_type: str, prompt: str, timeout: int = 30) -> Optional[str]:
+        result = self._run("velyx-ai", ["respond", task_type, prompt], timeout=timeout)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+        return None
+
     def _validate_path(self, path_value: str, for_write: bool = False) -> Path:
         raw_path = Path(os.path.expanduser(path_value))
         candidate = raw_path if raw_path.is_absolute() else (Path.cwd() / raw_path)
@@ -477,8 +483,13 @@ class ToolDispatcher:
             if plain:
                 results.append({"title": query, "url": "", "snippet": truncate(plain, 220)})
         summary_lines = [f"{index + 1}. {item['title']}: {item['snippet']}" for index, item in enumerate(results[:3])]
+        ai_summary = self._run_ai_text_task(
+            "summarize_text",
+            f"Summarize these search findings for '{query}' in a concise user-facing answer:\n" + "\n".join(summary_lines),
+            timeout=35,
+        )
         return {
-            "summary": "\n".join(summary_lines) if summary_lines else "No search results.",
+            "summary": ai_summary or ("\n".join(summary_lines) if summary_lines else "No search results."),
             "sources": results,
             "details": f"Web search completed for '{query}'.",
         }
@@ -603,27 +614,35 @@ class ToolDispatcher:
         if tool_id == "webpage_summary":
             return self._fetch_url_summary(payload["url"])
         if tool_id == "summarize_text":
-            return {"summary": truncate(payload["text"], 420), "details": "Summary generated locally."}
+            generated = self._run_ai_text_task("summarize_text", payload["text"])
+            return {"summary": generated or truncate(payload["text"], 420), "details": "Summary generated via model runtime." if generated else "Summary generated locally."}
         if tool_id == "explain_error":
             text = payload["text"]
-            explanation = "This looks like a runtime or configuration failure."
-            if "degraded" in text.lower():
-                explanation = "The system is running, but one or more required components are unavailable."
-            elif "recovery" in text.lower():
-                explanation = "Recovery is required because the last update or runtime transition did not complete cleanly."
-            elif "permission" in text.lower():
-                explanation = "The action was blocked by the current permission or security policy."
+            explanation = self._run_ai_text_task("explain_error", text)
+            if not explanation:
+                explanation = "This looks like a runtime or configuration failure."
+                if "degraded" in text.lower():
+                    explanation = "The system is running, but one or more required components are unavailable."
+                elif "recovery" in text.lower():
+                    explanation = "Recovery is required because the last update or runtime transition did not complete cleanly."
+                elif "permission" in text.lower():
+                    explanation = "The action was blocked by the current permission or security policy."
             return {"summary": explanation, "details": truncate(text, 320)}
         if tool_id == "draft_text":
-            return {"summary": payload.get("prompt", ""), "details": "Draft generated locally."}
+            generated = self._run_ai_text_task("draft_text", payload.get("prompt", ""))
+            return {"summary": generated or payload.get("prompt", ""), "details": "Draft generated via model runtime." if generated else "Draft generated locally."}
         if tool_id == "generate_plan":
-            return {"summary": "1. Review current state\n2. Apply the requested action\n3. Verify the result", "details": ""}
+            generated = self._run_ai_text_task("generate_plan", payload.get("prompt", "Generate a short plan."))
+            return {"summary": generated or "1. Review current state\n2. Apply the requested action\n3. Verify the result", "details": ""}
         if tool_id == "generate_ui_copy":
-            return {"summary": "Ready. Continue work. Recovery required.", "details": ""}
+            generated = self._run_ai_text_task("generate_ui_copy", payload.get("prompt", "Generate short product copy for Velyx UI."))
+            return {"summary": generated or "Ready. Continue work. Recovery required.", "details": ""}
         if tool_id == "generate_icon_prompt":
-            return {"summary": f"Minimal icon concept for {payload.get('topic', 'the requested concept')}: dark base, cool cyan accent, calm operational feel.", "details": ""}
+            generated = self._run_ai_text_task("generate_icon_prompt", payload.get("topic", "the requested concept"))
+            return {"summary": generated or f"Minimal icon concept for {payload.get('topic', 'the requested concept')}: dark base, cool cyan accent, calm operational feel.", "details": ""}
         if tool_id == "generate_image_request":
-            return {"summary": f"Image request prepared for {payload.get('topic', 'the requested subject')}.", "details": ""}
+            generated = self._run_ai_text_task("generate_image_request", payload.get("topic", "the requested subject"))
+            return {"summary": generated or f"Image request prepared for {payload.get('topic', 'the requested subject')}.", "details": ""}
         if tool_id == "get_update_status":
             update = read_json(UPDATE_STATE, {})
             return {"summary": f"Update state: {update.get('update_state', 'unknown')}", "details": json.dumps(update, ensure_ascii=False)}

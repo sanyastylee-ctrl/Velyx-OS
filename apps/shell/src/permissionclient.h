@@ -152,6 +152,7 @@ public:
     Q_INVOKABLE void dismissAiSuggestion();
     Q_INVOKABLE void blockAiSuggestion();
     Q_INVOKABLE void setModelSelectionMode(const QString &mode);
+    Q_INVOKABLE void setModelBackend(const QString &backend);
     Q_INVOKABLE void setCurrentModel(const QString &modelId);
     Q_INVOKABLE void detectModelHardware();
     Q_INVOKABLE void checkUpdateSource(const QString &source);
@@ -159,6 +160,7 @@ public:
     Q_INVOKABLE void setFirstBootAiMode(const QString &mode);
     Q_INVOKABLE void setFirstBootStep(const QString &step);
     Q_INVOKABLE void setFirstBootModelSelectionMode(const QString &mode);
+    Q_INVOKABLE void setFirstBootBackend(const QString &backend);
     Q_INVOKABLE void setFirstBootDefaultSpace(const QString &spaceId);
     Q_INVOKABLE void setFirstBootPredictiveMode(const QString &mode);
     Q_INVOKABLE void rerunFirstBootChecks();

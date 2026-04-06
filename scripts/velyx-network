@@ -99,7 +99,7 @@ def ai_backend_status() -> tuple[str, bool, str]:
     if "openai" in endpoint_type or endpoint_type == "local_http":
         parsed = urllib.parse.urlparse(endpoint_url)
         base = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else endpoint_url.rstrip("/")
-        ok, reason = fetch_ok(base.rstrip("/") + "/models")
+        ok, reason = fetch_ok(base.rstrip("/") + "/v1/models")
         return ("reachable" if ok else "unavailable"), ok, reason
 
     ok, reason = fetch_ok(endpoint_url)

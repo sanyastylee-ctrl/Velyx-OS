@@ -311,11 +311,22 @@ def set_predictive(mode: str) -> dict[str, Any]:
 
 
 def set_backend(backend: str) -> dict[str, Any]:
+    normalized = backend.strip() or "stub"
+    if normalized == "ollama-compatible":
+        normalized = "ollama"
     ai = read_json(AI_CONFIG, {})
-    ai["endpoint_type"] = backend.strip() or "stub"
+    ai["endpoint_type"] = "ollama-compatible" if normalized == "ollama" else normalized
     save_json(AI_CONFIG, ai)
+    model = read_json(MODEL_CONFIG, {})
+    model["preferred_backend"] = normalized
+    preferences = [normalized]
+    for item in model.get("backend_preferences", []):
+        if item not in preferences:
+            preferences.append(item)
+    model["backend_preferences"] = preferences
+    save_json(MODEL_CONFIG, model)
     state = ensure_state()
-    log_event("first_boot_backend_set", "ok", f"backend={ai['endpoint_type']}")
+    log_event("first_boot_backend_set", "ok", f"backend={normalized}")
     return write_state(state)
 
 

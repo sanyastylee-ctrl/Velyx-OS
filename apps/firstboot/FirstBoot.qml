@@ -12,6 +12,10 @@ Rectangle {
 
     property string draftUsername: ""
     property string draftAiMode: permissionClient.firstBootAiMode === "hybrid" ? "hybrid" : "local"
+    property string draftModelSelection: permissionClient.firstBootModelSelectionMode.length > 0 ? permissionClient.firstBootModelSelectionMode : "auto_hardware"
+    property string draftBackend: permissionClient.aiRuntimeBackend === "ollama-compatible"
+        ? "ollama"
+        : (permissionClient.aiRuntimeBackend.length > 0 ? permissionClient.aiRuntimeBackend : "stub")
 
     function goToStep(stepName) {
         permissionClient.setFirstBootStep(stepName)
@@ -217,6 +221,100 @@ Rectangle {
                                     : "Local keeps Velyx focused on local model behavior and offline-safe assistant flows."
                                 color: Theme.textMuted
                                 wrapMode: Text.WordWrap
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.space3
+
+                            Label {
+                                text: "Model selection"
+                                color: Theme.textPrimary
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.space3
+
+                                Button {
+                                    Layout.fillWidth: true
+                                    text: "Manual"
+                                    highlighted: root.draftModelSelection === "manual"
+                                    onClicked: {
+                                        root.draftModelSelection = "manual"
+                                        root.permissionClient.setFirstBootModelSelectionMode("manual")
+                                    }
+                                }
+
+                                Button {
+                                    Layout.fillWidth: true
+                                    text: "Auto HW"
+                                    highlighted: root.draftModelSelection === "auto_hardware"
+                                    onClicked: {
+                                        root.draftModelSelection = "auto_hardware"
+                                        root.permissionClient.setFirstBootModelSelectionMode("auto_hardware")
+                                    }
+                                }
+
+                                Button {
+                                    Layout.fillWidth: true
+                                    text: "Auto Task"
+                                    highlighted: root.draftModelSelection === "auto_task"
+                                    onClicked: {
+                                        root.draftModelSelection = "auto_task"
+                                        root.permissionClient.setFirstBootModelSelectionMode("auto_task")
+                                    }
+                                }
+                            }
+                        }
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: Theme.space3
+
+                            Label {
+                                text: "Model backend"
+                                color: Theme.textPrimary
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                            }
+
+                            RowLayout {
+                                Layout.fillWidth: true
+                                spacing: Theme.space3
+
+                                Button {
+                                    Layout.fillWidth: true
+                                    text: "Stub"
+                                    highlighted: root.draftBackend === "stub"
+                                    onClicked: {
+                                        root.draftBackend = "stub"
+                                        root.permissionClient.setFirstBootBackend("stub")
+                                    }
+                                }
+
+                                Button {
+                                    Layout.fillWidth: true
+                                    text: "Ollama"
+                                    highlighted: root.draftBackend === "ollama"
+                                    onClicked: {
+                                        root.draftBackend = "ollama"
+                                        root.permissionClient.setFirstBootBackend("ollama")
+                                    }
+                                }
+
+                                Button {
+                                    Layout.fillWidth: true
+                                    text: "OpenAI local"
+                                    highlighted: root.draftBackend === "openai-compatible"
+                                    onClicked: {
+                                        root.draftBackend = "openai-compatible"
+                                        root.permissionClient.setFirstBootBackend("openai-compatible")
+                                    }
+                                }
                             }
                         }
 

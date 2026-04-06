@@ -341,6 +341,17 @@ class PromptBuilder:
             ensure_ascii=False,
         )
 
+    def build_content_prompt(self, task: str, prompt: str, context: Optional[dict] = None) -> str:
+        return json.dumps(
+            {
+                "task": task,
+                "instructions": "Respond in plain text. Be concise, helpful, and operational. Do not return JSON.",
+                "prompt": prompt,
+                "context": context or {},
+            },
+            ensure_ascii=False,
+        )
+
 
 class StubModelAdapter:
     def __init__(self, config: dict) -> None:
@@ -438,6 +449,30 @@ class StubModelAdapter:
 
         return recommendation
 
+    def generate_text(self, task: str, prompt: str, context: Optional[dict] = None) -> dict:
+        lowered = task.lower()
+        compact_prompt = " ".join(prompt.split())
+        if lowered == "summarize_text":
+            text = compact_prompt[:480]
+        elif lowered == "explain_error":
+            if "degraded" in compact_prompt.lower():
+                text = "The system is degraded because one or more required services are not fully available yet."
+            elif "recovery" in compact_prompt.lower():
+                text = "Recovery is recommended because the previous update or runtime transition did not complete cleanly."
+            else:
+                text = "This looks like a runtime or configuration issue that needs review before continuing."
+        elif lowered == "generate_plan":
+            text = "1. Review the current state.\n2. Apply the requested change.\n3. Verify the result and adjust if needed."
+        elif lowered == "generate_ui_copy":
+            text = "Ready. Continue work. Needs attention."
+        elif lowered == "generate_icon_prompt":
+            text = f"Minimal calm operational icon for: {compact_prompt}. Dark base, cool cyan accent, clean geometry."
+        elif lowered == "generate_image_request":
+            text = f"Prepare an image request for: {compact_prompt}. Keep it concise and visually specific."
+        else:
+            text = compact_prompt
+        return {"text": text}
+
 
 class OpenAICompatibleAdapter:
     def __init__(self, config: dict) -> None:
@@ -487,6 +522,21 @@ class OpenAICompatibleAdapter:
         content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
         return {"raw_text": content}
 
+    def generate_text(self, task: str, prompt: str, context: Optional[dict] = None) -> dict:
+        prompt_builder = PromptBuilder()
+        response = self._request(
+            {
+                "model": self.config.get("model_name"),
+                "messages": [
+                    {"role": "system", "content": "Respond with plain text only. Keep the answer concise and useful."},
+                    {"role": "user", "content": prompt_builder.build_content_prompt(task, prompt, context)},
+                ],
+                "max_tokens": self.config.get("max_tokens", 512),
+            }
+        )
+        content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return {"text": content.strip()}
+
 
 class OllamaCompatibleAdapter:
     def __init__(self, config: dict) -> None:
@@ -523,6 +573,17 @@ class OllamaCompatibleAdapter:
             }
         )
         return {"raw_text": response.get("response", "")}
+
+    def generate_text(self, task: str, prompt: str, context: Optional[dict] = None) -> dict:
+        prompt_builder = PromptBuilder()
+        response = self._request(
+            {
+                "model": self.config.get("model_name"),
+                "prompt": "Respond with plain text only. Keep the answer concise and useful.\n" + prompt_builder.build_content_prompt(task, prompt, context),
+                "stream": False,
+            }
+        )
+        return {"text": response.get("response", "").strip()}
 
 
 class ResponseParser:
@@ -718,12 +779,13 @@ class AiEngine:
         runtime_config = effective_config or self.config
         runtime_route = route or {}
         self.adapter = ModelAdapterFactory.build(runtime_config)
-        available = False
+        runtime_ready = False
         try:
-            available = self.adapter.ping()
+            runtime_ready = self.adapter.ping()
         except Exception as exc:
             self.state["last_error"] = str(exc)
-        self.state["model_available"] = available
+        self.state["model_available"] = bool(runtime_route.get("available", runtime_ready))
+        self.state["runtime_ready"] = runtime_ready
         self.state["current_mode"] = self.config.get("mode", "off")
         self.state["current_model"] = runtime_config.get("model_name", "")
         self.state["current_model_profile"] = runtime_route.get("selected_profile", "")
@@ -732,6 +794,21 @@ class AiEngine:
         self.state["last_model_route"] = runtime_route
         self.state["last_routing_reason"] = runtime_route.get("explanation", "")
         self.state["last_fallback_reason"] = runtime_route.get("fallback_reason", "")
+
+    def compose_text(self, task: str, prompt: str, context: Optional[dict] = None) -> str:
+        effective_config, route = self._effective_config_for_task(task)
+        self._update_model_availability(effective_config, route)
+        log_event("ai_request_begin", "started", f"task={task} trigger=text")
+        payload = self.adapter.generate_text(task, prompt, context or self.context_builder.build_snapshot())
+        text = str(payload.get("text", "")).strip()
+        if not text:
+            text = prompt.strip()
+        self.state["last_summary"] = text
+        self.state["last_run_at"] = now_iso()
+        self.state["last_task_type"] = self._task_type_for(task)
+        self._save_state()
+        log_event("ai_request_ok", "ok", f"task={task} trigger=text")
+        return text
 
     def _generate(self, task: str, trigger: str = "manual") -> tuple[dict, dict]:
         snapshot = self.context_builder.build_snapshot()
@@ -1057,6 +1134,9 @@ class AiEngine:
                 "runtime_backend": self.state.get("runtime_backend", ""),
                 "endpoint_type": self.config.get("endpoint_type"),
                 "model_available": self.state.get("model_available", False),
+                "runtime_ready": self.state.get("runtime_ready", False),
+                "resolved_status": self.state.get("last_model_route", {}).get("resolved_status", ""),
+                "requested_model_id": self.state.get("last_model_route", {}).get("requested_model_id", ""),
                 "routing_reason": self.state.get("last_routing_reason", ""),
                 "fallback_reason": self.state.get("last_fallback_reason", ""),
                 "last_suggestion_result": self.state.get("last_suggestion_result", ""),
@@ -1101,7 +1181,7 @@ class AiEngine:
 
 def usage() -> int:
     print(
-        "usage: velyx-ai status | mode | set-mode off|suggest|auto | summary | explain | suggest | visual-analyze <image_path> [--request text] [--change-summary text] [--previous path] | tick | run-last-suggestion | dismiss-last-suggestion | block-last-suggestion | export-training-data [path] | config | ping-model",
+        "usage: velyx-ai status | mode | set-mode off|suggest|auto | summary | explain | suggest | respond <task_type> <prompt> | visual-analyze <image_path> [--request text] [--change-summary text] [--previous path] | tick | run-last-suggestion | dismiss-last-suggestion | block-last-suggestion | export-training-data [path] | config | ping-model",
         file=sys.stderr,
     )
     return 1
@@ -1129,6 +1209,10 @@ def main() -> int:
             print(engine.explain())
         elif command == "suggest":
             print(engine.suggest(trigger="manual", manual=True))
+        elif command == "respond":
+            if len(sys.argv) < 4:
+                return usage()
+            print(engine.compose_text(sys.argv[2], " ".join(sys.argv[3:])))
         elif command == "visual-analyze":
             if len(sys.argv) < 3:
                 return usage()

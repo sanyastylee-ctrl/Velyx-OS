@@ -2049,6 +2049,34 @@ void PermissionClient::setModelSelectionMode(const QString &mode)
     updateStatusDetails("model_selection_mode", "failed", trimmed, "retry");
 }
 
+void PermissionClient::setModelBackend(const QString &backend)
+{
+    const QString trimmed = backend.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-model", {"set-backend", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(6000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        refreshRuntimeStatus();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? QString("Model backend set to %1").arg(trimmed) : output);
+            updateStatusDetails("model_backend", "ok", trimmed, "observe_runtime");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? QString("Failed to switch model backend to %1").arg(trimmed) : errorOutput);
+        updateStatusDetails("model_backend", "failed", trimmed, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Model backend control unavailable");
+    updateStatusDetails("model_backend", "failed", trimmed, "retry");
+}
+
 void PermissionClient::setCurrentModel(const QString &modelId)
 {
     const QString trimmed = modelId.trimmed();
@@ -2169,6 +2197,18 @@ void PermissionClient::setFirstBootModelSelectionMode(const QString &mode)
         refreshAiState();
         updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "First Boot model selection updated" : QString::fromUtf8(process.readAllStandardError()).trimmed());
         updateStatusDetails("first_boot_model_selection", process.exitCode() == 0 ? "ok" : "failed", mode, "review");
+    }
+}
+
+void PermissionClient::setFirstBootBackend(const QString &backend)
+{
+    QProcess process;
+    process.start("velyx-firstboot", {"set-backend", backend.trimmed()});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        refreshFirstBootState();
+        refreshAiState();
+        updateLaunchState(process.exitCode() == 0 ? "ok" : "error", process.exitCode() == 0 ? "First Boot backend updated" : QString::fromUtf8(process.readAllStandardError()).trimmed());
+        updateStatusDetails("first_boot_backend", process.exitCode() == 0 ? "ok" : "failed", backend, "review");
     }
 }
 

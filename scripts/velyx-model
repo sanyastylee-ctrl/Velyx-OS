@@ -142,6 +142,7 @@ def ensure_config() -> dict:
         "default_heavy_model": "qwen-heavy-32b",
         "current_active_model": "",
         "allow_fallback": True,
+        "preferred_backend": "ollama",
         "backend_preferences": ["ollama", "openai-compatible", "stub"],
         "routing_thresholds": {
             "fast_system_action": "small",
@@ -172,10 +173,12 @@ def ensure_state() -> dict:
         "last_benchmark": {},
         "backend_status": "unknown",
         "model_available": False,
+        "runtime_ready": False,
         "last_route": {},
         "hardware_profile": {},
         "last_detected_at": "",
         "last_run_at": "",
+        "last_fallback_reason": "",
     }
     changed = False
     for key, value in defaults.items():
@@ -472,6 +475,91 @@ class ModelRouter:
         }
         return mapping.get(profile, self.config.get("default_main_model", "qwen-main-14b"))
 
+    def _backend_preference_order(self) -> list[str]:
+        configured = list(self.config.get("backend_preferences", []))
+        preferred = self.config.get("preferred_backend", "")
+        ordered: list[str] = []
+        if preferred:
+            ordered.append(preferred)
+        for backend_name in configured:
+            if backend_name not in ordered:
+                ordered.append(backend_name)
+        for backend_name in ["ollama", "openai-compatible", "stub"]:
+            if backend_name not in ordered:
+                ordered.append(backend_name)
+        return ordered
+
+    def _sort_models(self, models: list[dict]) -> list[dict]:
+        backend_order = self._backend_preference_order()
+        rank = {name: index for index, name in enumerate(backend_order)}
+        return sorted(
+            models,
+            key=lambda model: (
+                rank.get(model.get("runtime_backend", "stub"), 999),
+                0 if model.get("installed", False) else 1,
+                0 if model.get("enabled", True) else 1,
+                model.get("display_name", ""),
+            ),
+        )
+
+    def _candidates_for_profile(self, profile: str) -> list[dict]:
+        return self._sort_models(
+            [
+                model
+                for model in self.registry.get("models", [])
+                if model.get("size_class") == profile and model.get("enabled", True)
+            ]
+        )
+
+    def _requested_model(self, selection_mode: str, requested_profile: str) -> dict:
+        model_map = self._model_map()
+        if selection_mode == "manual":
+            current = self.config.get("current_active_model") or self._default_model_id_for_profile("main")
+            return model_map.get(current, next(iter(model_map.values())))
+        requested_id = self._default_model_id_for_profile(requested_profile)
+        return model_map.get(requested_id, next(iter(model_map.values())))
+
+    def _candidate_ready(self, model: dict) -> tuple[bool, bool]:
+        profile_ok = self._profile_allowed_by_hardware(model.get("size_class", "main"))
+        installed = bool(model.get("installed", False))
+        if not profile_ok or not installed:
+            return False, False
+        backend_name = model.get("runtime_backend", "stub")
+        backend = backend_for(backend_name)
+        runtime_ready = backend.ping(model.get("local_name", ""), model.get("endpoint_url", ""))
+        return runtime_ready, runtime_ready
+
+    def _build_stub_route(
+        self,
+        selection_mode: str,
+        task_type: str,
+        requested_profile: str,
+        requested_model: dict,
+        fallback_reason: str,
+        explanation: str,
+    ) -> dict:
+        return {
+            "selection_mode": selection_mode,
+            "task_type": task_type,
+            "requested_profile": requested_profile,
+            "requested_model_id": requested_model.get("model_id", ""),
+            "selected_profile": requested_profile,
+            "model_id": "",
+            "display_name": "Stub fallback",
+            "local_name": "stub",
+            "runtime_backend": "stub",
+            "endpoint_type": "stub",
+            "endpoint_url": "",
+            "available": False,
+            "runtime_ready": True,
+            "resolved_status": "degraded",
+            "uses_stub_fallback": True,
+            "fallback_reason": fallback_reason or "no_usable_local_model",
+            "explanation": f"{explanation} No usable local model is available, so Velyx will continue in stub fallback mode.".strip(),
+            "hardware_tier": self.hardware.get("hardware_tier", "unknown"),
+            "preferred_backend": self.config.get("preferred_backend", "ollama"),
+        }
+
     def _profile_allowed_by_hardware(self, profile: str) -> bool:
         ram = float(self.hardware.get("total_ram_gb", 0.0) or 0.0)
         vram = float(self.hardware.get("gpu_vram_gb", 0.0) or 0.0)
@@ -482,50 +570,91 @@ class ModelRouter:
         return True
 
     def resolve(self, task_type: str = "general_assistant", requested_profile: Optional[str] = None) -> dict:
-        model_map = self._model_map()
         selection_mode = self.config.get("selection_mode", "auto_hardware")
         profile = requested_profile or "main"
         explanation = ""
         fallback_reason = ""
 
         if selection_mode == "manual":
-            current = self.config.get("current_active_model") or self._default_model_id_for_profile("main")
-            model = model_map.get(current, next(iter(model_map.values())))
-            profile = model.get("size_class", "main")
-            explanation = f"Using manual model selection with {model.get('display_name')}."
+            requested_model = self._requested_model(selection_mode, "main")
+            profile = requested_model.get("size_class", "main")
+            explanation = f"Using manual model selection with {requested_model.get('display_name')}."
         elif selection_mode == "auto_hardware":
             profile = self.hardware.get("recommended_profile", "main")
             explanation = f"Using {profile} profile based on detected hardware tier {self.hardware.get('hardware_tier', 'unknown')}."
-            model = model_map.get(self._default_model_id_for_profile(profile), next(iter(model_map.values())))
+            requested_model = self._requested_model(selection_mode, profile)
         else:
             profile = self._profile_target_for_task(task_type)
             explanation = f"Using {profile} profile for task type {task_type}."
-            model = model_map.get(self._default_model_id_for_profile(profile), next(iter(model_map.values())))
+            requested_model = self._requested_model(selection_mode, profile)
 
-        if not model.get("installed", False):
+        model = requested_model
+
+        if not requested_model.get("installed", False):
             fallback_reason = "requested_model_unavailable"
-        if not self._profile_allowed_by_hardware(model.get("size_class", profile)):
+        elif not self._profile_allowed_by_hardware(requested_model.get("size_class", profile)):
             fallback_reason = fallback_reason or "hardware_limit"
+        else:
+            runtime_ready, available = self._candidate_ready(requested_model)
+            if runtime_ready and available:
+                fallback_reason = ""
+            else:
+                fallback_reason = "backend_unreachable"
 
         if fallback_reason and self.config.get("allow_fallback", True):
-            fallback_chain = ["main", "small"] if model.get("size_class") == "heavy" else ["small"]
+            fallback_chain = ["main", "small"] if requested_model.get("size_class") == "heavy" else ["small"]
+            if requested_model.get("size_class") == "small":
+                fallback_chain = []
             for fallback_profile in fallback_chain:
-                candidate = model_map.get(self._default_model_id_for_profile(fallback_profile))
-                if candidate and candidate.get("enabled", True) and candidate.get("installed", False):
-                    model = candidate
-                    explanation = f"{explanation} Falling back to {candidate.get('display_name')}."
-                    profile = candidate.get("size_class", fallback_profile)
+                for candidate in self._candidates_for_profile(fallback_profile):
+                    if not self._profile_allowed_by_hardware(candidate.get("size_class", fallback_profile)):
+                        continue
+                    runtime_ready, available = self._candidate_ready(candidate)
+                    if runtime_ready and available:
+                        model = candidate
+                        explanation = f"{explanation} Falling back to {candidate.get('display_name')}."
+                        profile = candidate.get("size_class", fallback_profile)
+                        fallback_reason = fallback_reason
+                        break
+                if model.get("model_id") != requested_model.get("model_id"):
                     break
         elif fallback_reason:
             explanation = f"{explanation} Requested model is unavailable and fallback is disabled."
 
+        if model.get("model_id") == requested_model.get("model_id"):
+            runtime_ready, available = self._candidate_ready(model)
+        else:
+            runtime_ready, available = self._candidate_ready(model)
+
+        if fallback_reason and (not available) and self.config.get("allow_fallback", True):
+            route = self._build_stub_route(
+                selection_mode=selection_mode,
+                task_type=task_type,
+                requested_profile=requested_profile or requested_model.get("size_class", profile),
+                requested_model=requested_model,
+                fallback_reason=fallback_reason,
+                explanation=explanation,
+            )
+            self.state["active_model"] = route["model_id"]
+            self.state["active_profile"] = route["selected_profile"]
+            self.state["selection_mode"] = selection_mode
+            self.state["backend_status"] = "degraded"
+            self.state["model_available"] = False
+            self.state["runtime_ready"] = True
+            self.state["last_route"] = route
+            self.state["last_fallback_reason"] = route["fallback_reason"]
+            self.state["last_run_at"] = now_iso()
+            self.state["fallback_count"] = int(self.state.get("fallback_count", 0)) + 1
+            save_json(MODEL_STATE, self.state)
+            log_event("model_routed", "degraded", f"task={task_type} model=stub fallback={fallback_reason}")
+            return route
+
         backend_name = model.get("runtime_backend", "stub")
-        backend = backend_for(backend_name)
-        available = backend.ping(model.get("local_name", ""), model.get("endpoint_url", ""))
         route = {
             "selection_mode": selection_mode,
             "task_type": task_type,
-            "requested_profile": requested_profile or profile,
+            "requested_profile": requested_profile or requested_model.get("size_class", profile),
+            "requested_model_id": requested_model.get("model_id", ""),
             "selected_profile": profile,
             "model_id": model.get("model_id", ""),
             "display_name": model.get("display_name", ""),
@@ -534,20 +663,27 @@ class ModelRouter:
             "endpoint_type": model.get("endpoint_type", "stub"),
             "endpoint_url": model.get("endpoint_url", ""),
             "available": available,
+            "runtime_ready": runtime_ready,
+            "resolved_status": "fallback" if model.get("model_id") != requested_model.get("model_id") else ("ready" if available else "degraded"),
+            "uses_stub_fallback": False,
             "fallback_reason": fallback_reason,
             "explanation": explanation,
+            "hardware_tier": self.hardware.get("hardware_tier", "unknown"),
+            "preferred_backend": self.config.get("preferred_backend", "ollama"),
         }
         self.state["active_model"] = route["model_id"]
         self.state["active_profile"] = route["selected_profile"]
         self.state["selection_mode"] = selection_mode
-        self.state["backend_status"] = "ready" if available else "degraded"
+        self.state["backend_status"] = "ready" if runtime_ready else "degraded"
         self.state["model_available"] = available
+        self.state["runtime_ready"] = runtime_ready
         self.state["last_route"] = route
+        self.state["last_fallback_reason"] = fallback_reason
         self.state["last_run_at"] = now_iso()
         if fallback_reason:
             self.state["fallback_count"] = int(self.state.get("fallback_count", 0)) + 1
         save_json(MODEL_STATE, self.state)
-        log_event("model_routed", "ok" if available else "degraded", f"task={task_type} model={route['model_id']} fallback={fallback_reason}")
+        log_event("model_routed", "ok" if available else "degraded", f"task={task_type} model={route['model_id'] or 'none'} fallback={fallback_reason}")
         return route
 
 
@@ -563,15 +699,34 @@ class ModelManager:
 
     def status(self) -> dict:
         self.registry = ModelDiscovery().discover()
+        current_route = ModelRouter().resolve("general_assistant")
+        self.config = ensure_config()
         self.state = ensure_state()
         return {
             "selection_mode": self.config.get("selection_mode", "auto_hardware"),
+            "preferred_backend": self.config.get("preferred_backend", "ollama"),
+            "backend_preferences": self.config.get("backend_preferences", []),
             "active_model": self.state.get("active_model", ""),
             "active_profile": self.state.get("active_profile", ""),
             "backend_status": self.state.get("backend_status", "unknown"),
             "model_available": self.state.get("model_available", False),
-            "last_route": self.state.get("last_route", {}),
+            "runtime_ready": self.state.get("runtime_ready", False),
+            "fallback_count": self.state.get("fallback_count", 0),
+            "last_fallback_reason": self.state.get("last_fallback_reason", ""),
+            "last_route": current_route,
             "hardware_profile": self.state.get("hardware_profile", {}),
+            "last_benchmark": self.state.get("last_benchmark", {}),
+            "installed_models": [
+                {
+                    "model_id": model.get("model_id", ""),
+                    "display_name": model.get("display_name", ""),
+                    "size_class": model.get("size_class", ""),
+                    "runtime_backend": model.get("runtime_backend", "stub"),
+                    "installed": bool(model.get("installed", False)),
+                    "enabled": bool(model.get("enabled", True)),
+                }
+                for model in self.registry.get("models", [])
+            ],
         }
 
     def current(self) -> dict:
@@ -589,8 +744,8 @@ class ModelManager:
         route = ModelRouter().resolve("general_assistant")
         return {
             "hardware_tier": hardware.get("hardware_tier", ""),
-            "recommended_model": route.get("model_id", ""),
-            "recommended_profile": route.get("selected_profile", ""),
+            "recommended_model": route.get("requested_model_id", "") or route.get("model_id", ""),
+            "recommended_profile": hardware.get("recommended_profile", route.get("requested_profile", route.get("selected_profile", ""))),
             "hardware_profile": hardware,
             "explanation": route.get("explanation", ""),
         }
@@ -656,6 +811,21 @@ class ModelManager:
         log_event("model_selection_mode_changed", "ok", f"mode={mode}")
         return route
 
+    def set_backend(self, backend_name: str) -> dict:
+        normalized = backend_name.strip()
+        if normalized not in {"ollama", "openai-compatible", "stub"}:
+            raise RuntimeError("backend must be ollama, openai-compatible, or stub")
+        preferences = [normalized]
+        for item in self.config.get("backend_preferences", []):
+            if item not in preferences:
+                preferences.append(item)
+        self.config["preferred_backend"] = normalized
+        self.config["backend_preferences"] = preferences
+        save_json(MODEL_CONFIG, self.config)
+        route = ModelRouter().resolve("general_assistant")
+        log_event("model_backend_changed", "ok", f"backend={normalized}")
+        return route
+
     def benchmark(self, model_id_or_name: Optional[str] = None) -> dict:
         route = ModelRouter().resolve("general_assistant")
         model = self._resolve_model(model_id_or_name) if model_id_or_name else self._resolve_model(route.get("model_id", ""))
@@ -679,7 +849,7 @@ class ModelManager:
 
 def usage() -> int:
     print(
-        "usage: velyx-model list | status | current | detect-hardware | recommend | benchmark [model] | pull <model> | install-profile <small|main|heavy> | set-default <profile> <model_id> | use <model_id> | set-selection-mode <manual|auto_hardware|auto_task> | route-task <task_type>",
+        "usage: velyx-model list | status | current | detect-hardware | recommend | benchmark [model] | pull <model> | install-profile <small|main|heavy> | set-default <profile> <model_id> | use <model_id> | set-selection-mode <manual|auto_hardware|auto_task> | set-backend <ollama|openai-compatible|stub> | route-task <task_type>",
         file=sys.stderr,
     )
     return 1
@@ -713,6 +883,8 @@ def main() -> int:
             print_json(manager.use(sys.argv[2]))
         elif command == "set-selection-mode" and len(sys.argv) > 2:
             print_json(manager.set_selection_mode(sys.argv[2]))
+        elif command == "set-backend" and len(sys.argv) > 2:
+            print_json(manager.set_backend(sys.argv[2]))
         elif command == "route-task" and len(sys.argv) > 2:
             print_json(manager.route_task(sys.argv[2]))
         else:

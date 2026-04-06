@@ -171,6 +171,7 @@ Rectangle {
                         StatusChip { compact: true; label: "Model"; value: root.permissionClient.aiModelName.length > 0 ? root.permissionClient.aiModelName : "unconfigured"; tone: "accent" }
                         StatusChip { compact: true; label: "Backend"; value: root.permissionClient.aiRuntimeBackend.length > 0 ? root.permissionClient.aiRuntimeBackend : "stub"; tone: "neutral" }
                         StatusChip { compact: true; label: "Selection"; value: root.permissionClient.aiSelectionMode.length > 0 ? root.permissionClient.aiSelectionMode : "manual"; tone: "accent" }
+                        StatusChip { compact: true; label: "Fallback"; value: root.permissionClient.aiFallbackReason.length > 0 ? root.permissionClient.aiFallbackReason : "none"; tone: root.permissionClient.aiFallbackReason.length > 0 ? "warning" : "neutral" }
                     }
 
                     RowLayout {
@@ -180,6 +181,15 @@ Rectangle {
                         Button { text: "Off"; onClicked: root.permissionClient.setAiMode("off") }
                         Button { text: "Suggest"; onClicked: root.permissionClient.setAiMode("suggest") }
                         Button { text: "Auto"; onClicked: root.permissionClient.setAiMode("auto") }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+
+                        Button { text: "Stub"; onClicked: root.permissionClient.setModelBackend("stub") }
+                        Button { text: "Ollama"; onClicked: root.permissionClient.setModelBackend("ollama") }
+                        Button { text: "OpenAI local"; onClicked: root.permissionClient.setModelBackend("openai-compatible") }
                     }
 
                     RowLayout {
