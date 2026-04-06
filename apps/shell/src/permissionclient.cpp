@@ -121,6 +121,16 @@ QString PermissionClient::activeRuntimeState() const
     return m_activeRuntimeState;
 }
 
+QString PermissionClient::inputControlMode() const
+{
+    return m_inputControlMode;
+}
+
+QString PermissionClient::shortcutFeedback() const
+{
+    return m_shortcutFeedback;
+}
+
 QString PermissionClient::launchStatus() const
 {
     return m_launchStatus;
@@ -584,6 +594,100 @@ void PermissionClient::restartOpenApp(const QString &appId)
     updateActiveApp(appId, true);
     logShellEvent("shell_window_restart_requested", appId, "restart requested from open apps list");
     restartSelectedApp();
+}
+
+void PermissionClient::activateNextApp()
+{
+    logShellEvent("shell_input_event", "", "shortcut=Alt+Tab");
+    if (m_openApps.isEmpty()) {
+        m_shortcutFeedback = "Alt+Tab: нет запущенных приложений";
+        emit inputStatusChanged();
+        logShellEvent("shell_shortcut_failed", "", "shortcut=Alt+Tab reason=no_running_apps");
+        return;
+    }
+
+    int currentIndex = -1;
+    for (int index = 0; index < m_openApps.size(); ++index) {
+        if (m_openApps[index].toMap().value("app_id").toString() == m_activeAppId) {
+            currentIndex = index;
+            break;
+        }
+    }
+
+    const int nextIndex = (currentIndex + 1 + m_openApps.size()) % m_openApps.size();
+    const QString appId = m_openApps[nextIndex].toMap().value("app_id").toString();
+    m_shortcutFeedback = QString("Alt+Tab -> %1").arg(appId);
+    emit inputStatusChanged();
+    logShellEvent("shell_shortcut_triggered", appId, "shortcut=Alt+Tab");
+    logShellEvent("shell_active_switch", appId, "source=shortcut");
+    selectActiveApp(appId);
+}
+
+void PermissionClient::closeActiveApp()
+{
+    logShellEvent("shell_input_event", "", "shortcut=Alt+Q");
+    if (m_activeAppId.isEmpty()) {
+        m_shortcutFeedback = "Alt+Q: нет активного приложения";
+        emit inputStatusChanged();
+        logShellEvent("shell_shortcut_failed", "", "shortcut=Alt+Q reason=no_active_app");
+        return;
+    }
+
+    m_shortcutFeedback = QString("Alt+Q -> close %1").arg(m_activeAppId);
+    emit inputStatusChanged();
+    logShellEvent("shell_shortcut_triggered", m_activeAppId, "shortcut=Alt+Q");
+    closeOpenApp(m_activeAppId);
+}
+
+void PermissionClient::restartActiveInstance()
+{
+    logShellEvent("shell_input_event", "", "shortcut=Alt+R");
+    if (m_activeAppId.isEmpty()) {
+        m_shortcutFeedback = "Alt+R: нет активного приложения";
+        emit inputStatusChanged();
+        logShellEvent("shell_shortcut_failed", "", "shortcut=Alt+R reason=no_active_app");
+        return;
+    }
+
+    m_shortcutFeedback = QString("Alt+R -> restart %1").arg(m_activeAppId);
+    emit inputStatusChanged();
+    logShellEvent("shell_shortcut_triggered", m_activeAppId, "shortcut=Alt+R");
+    restartOpenApp(m_activeAppId);
+}
+
+void PermissionClient::activateAppByIndex(int index)
+{
+    logShellEvent("shell_input_event", "", QString("shortcut=Alt+%1").arg(index + 1));
+    if (index < 0 || index >= m_openApps.size()) {
+        m_shortcutFeedback = QString("Alt+%1: приложение недоступно").arg(index + 1);
+        emit inputStatusChanged();
+        logShellEvent("shell_shortcut_failed", "", QString("shortcut=Alt+%1 reason=index_out_of_range").arg(index + 1));
+        return;
+    }
+
+    const QString appId = m_openApps[index].toMap().value("app_id").toString();
+    m_shortcutFeedback = QString("Alt+%1 -> %2").arg(index + 1).arg(appId);
+    emit inputStatusChanged();
+    logShellEvent("shell_shortcut_triggered", appId, QString("shortcut=Alt+%1").arg(index + 1));
+    logShellEvent("shell_active_switch", appId, "source=shortcut_index");
+    selectActiveApp(appId);
+}
+
+void PermissionClient::setInputControlMode(const QString &mode, const QString &details)
+{
+    bool changed = false;
+    if (m_inputControlMode != mode) {
+        m_inputControlMode = mode;
+        changed = true;
+    }
+    if (m_shortcutFeedback != details) {
+        m_shortcutFeedback = details;
+        changed = true;
+    }
+    if (changed) {
+        emit inputStatusChanged();
+    }
+    logShellEvent("shell_input_event", "", QString("mode=%1 details=%2").arg(mode, details));
 }
 
 void PermissionClient::requestLaunchFromLauncher(

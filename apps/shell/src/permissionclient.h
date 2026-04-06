@@ -17,6 +17,8 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString activeWindowId READ activeWindowId NOTIFY activeAppChanged)
     Q_PROPERTY(QString activeWindowTitle READ activeWindowTitle NOTIFY activeAppChanged)
     Q_PROPERTY(QString activeRuntimeState READ activeRuntimeState NOTIFY activeAppChanged)
+    Q_PROPERTY(QString inputControlMode READ inputControlMode NOTIFY inputStatusChanged)
+    Q_PROPERTY(QString shortcutFeedback READ shortcutFeedback NOTIFY inputStatusChanged)
     Q_PROPERTY(QString launchStatus READ launchStatus NOTIFY launchStatusChanged)
     Q_PROPERTY(QString launchResultMessage READ launchResultMessage NOTIFY launchResultMessageChanged)
     Q_PROPERTY(QString lastAction READ lastAction NOTIFY statusDetailsChanged)
@@ -49,6 +51,11 @@ public:
         const QString &permission);
     Q_INVOKABLE void submitDecision(const QString &appId, const QString &appName, const QString &permission, bool allowed);
     Q_INVOKABLE void resetPermissions(const QString &appId);
+    Q_INVOKABLE void activateNextApp();
+    Q_INVOKABLE void closeActiveApp();
+    Q_INVOKABLE void restartActiveInstance();
+    Q_INVOKABLE void activateAppByIndex(int index);
+    void setInputControlMode(const QString &mode, const QString &details);
 
     QVariantList apps() const;
     QVariantList openApps() const;
@@ -59,6 +66,8 @@ public:
     QString activeWindowId() const;
     QString activeWindowTitle() const;
     QString activeRuntimeState() const;
+    QString inputControlMode() const;
+    QString shortcutFeedback() const;
     QString launchStatus() const;
     QString launchResultMessage() const;
     QString lastAction() const;
@@ -86,6 +95,7 @@ signals:
     void statusDetailsChanged();
     void runtimeStatusChanged();
     void activeAppChanged();
+    void inputStatusChanged();
 
 private:
     QVariantMap fetchAppInfo(const QString &appId);
@@ -118,6 +128,8 @@ private:
     QString m_activeWindowId;
     QString m_activeWindowTitle;
     QString m_activeRuntimeState;
+    QString m_inputControlMode {"disabled"};
+    QString m_shortcutFeedback;
     QString m_pendingAppId;
     QString m_pendingAppName;
     QString m_pendingPermission;

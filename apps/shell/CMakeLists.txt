@@ -2,6 +2,8 @@ qt_add_executable(velyx-shell
     src/main.cpp
     src/aiclient.cpp
     src/aiclient.h
+    src/inputcontroller.cpp
+    src/inputcontroller.h
     src/permissionclient.cpp
     src/permissionclient.h
 )
@@ -32,3 +34,8 @@ target_link_libraries(velyx-shell
         VelyxDesignSystem
         VelyxCoreUi
 )
+
+if(UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED)
+    target_link_libraries(velyx-shell PRIVATE X11::X11)
+endif()

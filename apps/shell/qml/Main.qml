@@ -19,6 +19,78 @@ ApplicationWindow {
         permissionClient.refreshApps()
     }
 
+    Shortcut {
+        sequence: "Alt+Tab"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateNextApp()
+    }
+
+    Shortcut {
+        sequence: "Alt+Q"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.closeActiveApp()
+    }
+
+    Shortcut {
+        sequence: "Alt+R"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.restartActiveInstance()
+    }
+
+    Shortcut {
+        sequence: "Alt+1"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(0)
+    }
+
+    Shortcut {
+        sequence: "Alt+2"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(1)
+    }
+
+    Shortcut {
+        sequence: "Alt+3"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(2)
+    }
+
+    Shortcut {
+        sequence: "Alt+4"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(3)
+    }
+
+    Shortcut {
+        sequence: "Alt+5"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(4)
+    }
+
+    Shortcut {
+        sequence: "Alt+6"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(5)
+    }
+
+    Shortcut {
+        sequence: "Alt+7"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(6)
+    }
+
+    Shortcut {
+        sequence: "Alt+8"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(7)
+    }
+
+    Shortcut {
+        sequence: "Alt+9"
+        enabled: permissionClient.inputControlMode !== "x11-global"
+        onActivated: permissionClient.activateAppByIndex(8)
+    }
+
     Timer {
         interval: 3000
         running: true
@@ -194,6 +266,20 @@ ApplicationWindow {
                 subtitle: permissionClient.activeRuntimeState.length > 0
                     ? permissionClient.activeRuntimeState
                     : "inactive"
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Input mode"
+                subtitle: permissionClient.inputControlMode
+            }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Shortcut"
+                subtitle: permissionClient.shortcutFeedback.length > 0
+                    ? permissionClient.shortcutFeedback
+                    : "Alt+Tab / Alt+Q / Alt+R / Alt+1..9"
             }
         }
     }
