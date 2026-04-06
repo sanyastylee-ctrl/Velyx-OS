@@ -259,6 +259,61 @@ QString PermissionClient::lastAgentResult() const
     return m_lastAgentResult;
 }
 
+QString PermissionClient::aiMode() const
+{
+    return m_aiMode;
+}
+
+QString PermissionClient::aiProvider() const
+{
+    return m_aiProvider;
+}
+
+QString PermissionClient::aiModelName() const
+{
+    return m_aiModelName;
+}
+
+bool PermissionClient::aiModelAvailable() const
+{
+    return m_aiModelAvailable;
+}
+
+QString PermissionClient::aiLastSummary() const
+{
+    return m_aiLastSummary;
+}
+
+QString PermissionClient::aiSuggestionMessage() const
+{
+    return m_aiSuggestionMessage;
+}
+
+QString PermissionClient::aiSuggestionActionType() const
+{
+    return m_aiSuggestionActionType;
+}
+
+QString PermissionClient::aiSuggestionReason() const
+{
+    return m_aiSuggestionReason;
+}
+
+double PermissionClient::aiSuggestionConfidence() const
+{
+    return m_aiSuggestionConfidence;
+}
+
+bool PermissionClient::aiSuggestionAvailable() const
+{
+    return m_aiSuggestionAvailable;
+}
+
+QString PermissionClient::aiLastError() const
+{
+    return m_aiLastError;
+}
+
 QString PermissionClient::activeSpaceId() const
 {
     return m_activeSpaceId;
@@ -307,6 +362,7 @@ void PermissionClient::refreshApps()
     refreshIntents();
     refreshRules();
     refreshAgentState();
+    refreshAiState();
 
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     if (!launcher.isValid()) {
@@ -521,6 +577,114 @@ void PermissionClient::refreshAgentState()
     }
     if (changed) {
         emit agentStateChanged();
+    }
+}
+
+void PermissionClient::refreshAiState()
+{
+    QProcess tickProcess;
+    tickProcess.start("velyx-ai", {"tick"});
+    if (tickProcess.waitForStarted(200)) {
+        tickProcess.waitForFinished(1200);
+    }
+
+    const QString configPath = QDir::home().filePath(".velyx/ai_config.json");
+    const QString statePath = QDir::home().filePath(".velyx/ai_state.json");
+
+    QString mode {"off"};
+    QString provider {"local"};
+    QString modelName;
+    bool modelAvailable = false;
+    QString lastSummary;
+    QString suggestionMessage;
+    QString suggestionActionType;
+    QString suggestionReason;
+    double suggestionConfidence = 0.0;
+    bool suggestionAvailable = false;
+    QString lastError;
+
+    QFile configFile(configPath);
+    if (configFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(configFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            mode = object.value("mode").toString(mode);
+            provider = object.value("provider").toString(provider);
+            modelName = object.value("model_name").toString(modelName);
+        }
+    }
+
+    QFile stateFile(statePath);
+    if (stateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            mode = object.value("current_mode").toString(mode);
+            modelName = object.value("current_model").toString(modelName);
+            modelAvailable = object.value("model_available").toBool(false);
+            lastSummary = object.value("last_summary").toString();
+            lastError = object.value("last_error").toString();
+
+            const QJsonObject suggestion = object.value("last_suggestion").toObject();
+            if (!suggestion.isEmpty()) {
+                suggestionMessage = suggestion.value("user_message").toString();
+                suggestionActionType = suggestion.value("recommended_action_type").toString();
+                suggestionReason = suggestion.value("reason").toString();
+                suggestionConfidence = suggestion.value("confidence").toDouble(0.0);
+                suggestionAvailable = suggestion.value("dismissed").toBool(false) == false
+                    && (suggestionActionType != "none" || !suggestionMessage.isEmpty());
+            }
+        }
+    }
+
+    bool changed = false;
+    if (m_aiMode != mode) {
+        m_aiMode = mode;
+        changed = true;
+    }
+    if (m_aiProvider != provider) {
+        m_aiProvider = provider;
+        changed = true;
+    }
+    if (m_aiModelName != modelName) {
+        m_aiModelName = modelName;
+        changed = true;
+    }
+    if (m_aiModelAvailable != modelAvailable) {
+        m_aiModelAvailable = modelAvailable;
+        changed = true;
+    }
+    if (m_aiLastSummary != lastSummary) {
+        m_aiLastSummary = lastSummary;
+        changed = true;
+    }
+    if (m_aiSuggestionMessage != suggestionMessage) {
+        m_aiSuggestionMessage = suggestionMessage;
+        changed = true;
+    }
+    if (m_aiSuggestionActionType != suggestionActionType) {
+        m_aiSuggestionActionType = suggestionActionType;
+        changed = true;
+    }
+    if (m_aiSuggestionReason != suggestionReason) {
+        m_aiSuggestionReason = suggestionReason;
+        changed = true;
+    }
+    if (m_aiSuggestionConfidence != suggestionConfidence) {
+        m_aiSuggestionConfidence = suggestionConfidence;
+        changed = true;
+    }
+    if (m_aiSuggestionAvailable != suggestionAvailable) {
+        m_aiSuggestionAvailable = suggestionAvailable;
+        changed = true;
+    }
+    if (m_aiLastError != lastError) {
+        m_aiLastError = lastError;
+        changed = true;
+    }
+
+    if (changed) {
+        emit aiStateChanged();
     }
 }
 
@@ -1038,6 +1202,7 @@ void PermissionClient::runAgentCommand(const QString &command)
             updateLaunchState("ok", output.isEmpty() ? QString("Agent command выполнен: %1").arg(trimmed) : output);
             updateStatusDetails("agent_command", "ok", trimmed, "refresh_runtime");
             refreshAgentState();
+            refreshAiState();
             refreshRuntimeStatus();
             refreshSpaces();
             refreshIntents();
@@ -1049,11 +1214,185 @@ void PermissionClient::runAgentCommand(const QString &command)
         updateLaunchState("error", errorOutput.isEmpty() ? QString("Не удалось выполнить agent command: %1").arg(trimmed) : errorOutput);
         updateStatusDetails("agent_command", "failed", trimmed, "retry");
         refreshAgentState();
+        refreshAiState();
         return;
     }
 
     updateLaunchState("error", QString("Agent layer недоступен для команды: %1").arg(trimmed));
     updateStatusDetails("agent_command", "failed", trimmed, "retry");
+}
+
+void PermissionClient::setAiMode(const QString &mode)
+{
+    const QString trimmed = mode.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-ai", {"set-mode", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(3000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? QString("AI mode switched to %1").arg(trimmed) : output);
+            updateStatusDetails("ai_mode", "ok", trimmed, "observe_suggestion");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? QString("Не удалось включить AI mode %1").arg(trimmed) : errorOutput);
+        updateStatusDetails("ai_mode", "failed", trimmed, "retry");
+        return;
+    }
+
+    updateLaunchState("error", QString("AI layer недоступен для mode %1").arg(trimmed));
+    updateStatusDetails("ai_mode", "failed", trimmed, "retry");
+}
+
+void PermissionClient::runAiSummary()
+{
+    QProcess process;
+    process.start("velyx-ai", {"summary"});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "AI summary generated" : output);
+            updateStatusDetails("ai_summary", "ok", m_aiMode, "review");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Не удалось получить AI summary" : errorOutput);
+        updateStatusDetails("ai_summary", "failed", m_aiMode, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "AI summary unavailable");
+    updateStatusDetails("ai_summary", "failed", "ai_unavailable", "retry");
+}
+
+void PermissionClient::runAiExplain()
+{
+    QProcess process;
+    process.start("velyx-ai", {"explain"});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "AI explanation generated" : output);
+            updateStatusDetails("ai_explain", "ok", m_aiMode, "review");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Не удалось получить AI explanation" : errorOutput);
+        updateStatusDetails("ai_explain", "failed", m_aiMode, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "AI explanation unavailable");
+    updateStatusDetails("ai_explain", "failed", "ai_unavailable", "retry");
+}
+
+void PermissionClient::runAiSuggest()
+{
+    QProcess process;
+    process.start("velyx-ai", {"suggest"});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        refreshRuntimeStatus();
+        refreshSpaces();
+        refreshIntents();
+        refreshRules();
+        refreshAgentState();
+        refreshApps();
+        refreshOpenApps();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "AI suggestion updated" : output);
+            updateStatusDetails("ai_suggest", "ok", m_aiSuggestionActionType, m_aiSuggestionAvailable ? "review_suggestion" : "none");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Не удалось получить AI suggestion" : errorOutput);
+        updateStatusDetails("ai_suggest", "failed", m_aiMode, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "AI suggestion unavailable");
+    updateStatusDetails("ai_suggest", "failed", "ai_unavailable", "retry");
+}
+
+void PermissionClient::applyAiSuggestion()
+{
+    QProcess process;
+    process.start("velyx-ai", {"run-last-suggestion"});
+    if (process.waitForStarted(400) && process.waitForFinished(6000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        refreshRuntimeStatus();
+        refreshSpaces();
+        refreshIntents();
+        refreshRules();
+        refreshAgentState();
+        refreshApps();
+        refreshOpenApps();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "AI suggestion applied" : output);
+            updateStatusDetails("ai_apply", "ok", m_aiSuggestionActionType, "observe_result");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Не удалось применить AI suggestion" : errorOutput);
+        updateStatusDetails("ai_apply", "failed", m_aiSuggestionActionType, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "AI suggestion apply unavailable");
+    updateStatusDetails("ai_apply", "failed", "ai_unavailable", "retry");
+}
+
+void PermissionClient::dismissAiSuggestion()
+{
+    QProcess process;
+    process.start("velyx-ai", {"dismiss-last-suggestion"});
+    if (process.waitForStarted(400) && process.waitForFinished(3000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "AI suggestion dismissed" : output);
+            updateStatusDetails("ai_dismiss", "ok", "dismissed", "none");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Не удалось dismiss AI suggestion" : errorOutput);
+        updateStatusDetails("ai_dismiss", "failed", "dismiss", "retry");
+        return;
+    }
+
+    updateLaunchState("error", "AI dismissal unavailable");
+    updateStatusDetails("ai_dismiss", "failed", "ai_unavailable", "retry");
+}
+
+void PermissionClient::blockAiSuggestion()
+{
+    QProcess process;
+    process.start("velyx-ai", {"block-last-suggestion"});
+    if (process.waitForStarted(400) && process.waitForFinished(3000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "AI suggestion type blocked" : output);
+            updateStatusDetails("ai_block", "ok", m_aiSuggestionActionType, "none");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Не удалось заблокировать AI suggestion" : errorOutput);
+        updateStatusDetails("ai_block", "failed", m_aiSuggestionActionType, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "AI suggestion block unavailable");
+    updateStatusDetails("ai_block", "failed", "ai_unavailable", "retry");
 }
 
 void PermissionClient::launchSelectedApp()

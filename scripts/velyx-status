@@ -16,6 +16,8 @@ INTENT_STATE="${STATE_DIR}/intent_state.json"
 RULES_REGISTRY="${VELYX_RULES_REGISTRY:-${STATE_DIR}/rules_registry.json}"
 RULES_STATE="${STATE_DIR}/rules_state.json"
 AGENT_STATE="${STATE_DIR}/agent_state.json"
+AI_CONFIG="${STATE_DIR}/ai_config.json"
+AI_STATE_FILE="${STATE_DIR}/ai_state.json"
 
 unit_state() {
   local unit="$1"
@@ -50,6 +52,16 @@ state_bool() {
     return 0
   fi
   grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" "${STATE_FILE}" | head -n1 | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || printf 'false\n'
+}
+
+json_bool_string() {
+  local key="$1"
+  local file="$2"
+  if [[ ! -f "${file}" ]]; then
+    printf 'false\n'
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*(true|false)" "${file}" | head -n1 | sed -E 's/.*:[[:space:]]*(true|false)/\1/' || printf 'false\n'
 }
 
 app_count() {
@@ -119,6 +131,8 @@ printf 'spaces-registry: %s (count=%s active=%s)\n' "${SPACES_REGISTRY}" "$(spac
 printf 'intents-registry: %s (count=%s last=%s result=%s)\n' "${INTENTS_REGISTRY}" "$(intents_count)" "$(intent_state_string last_intent_id)" "$(intent_state_string last_result)"
 printf 'rules-registry: %s (count=%s last=%s result=%s)\n' "${RULES_REGISTRY}" "$(rules_count)" "$(intent_state_string last_rule_id "${RULES_STATE}")" "$(intent_state_string last_result "${RULES_STATE}")"
 printf 'agent-state: %s (last=%s result=%s)\n' "${AGENT_STATE}" "$(intent_state_string last_action "${AGENT_STATE}")" "$(intent_state_string last_result "${AGENT_STATE}")"
+printf 'ai-config: %s (mode=%s provider=%s model=%s)\n' "${AI_CONFIG}" "$(intent_state_string mode "${AI_CONFIG}")" "$(intent_state_string provider "${AI_CONFIG}")" "$(intent_state_string model_name "${AI_CONFIG}")"
+printf 'ai-state: %s (available=%s result=%s)\n' "${AI_STATE_FILE}" "$(json_bool_string model_available "${AI_STATE_FILE}")" "$(intent_state_string last_suggestion_result "${AI_STATE_FILE}")"
 printf 'xprop: %s\n' "$(command -v xprop >/dev/null 2>&1 && echo available || echo missing)"
 printf 'wmctrl: %s\n' "$(command -v wmctrl >/dev/null 2>&1 && echo available || echo missing)"
 printf 'xdotool: %s\n' "$(command -v xdotool >/dev/null 2>&1 && echo available || echo missing)"

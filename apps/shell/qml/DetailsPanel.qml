@@ -131,6 +131,21 @@ Rectangle {
                 : "No recent action"
         }
 
+        ListRow {
+            title: "AI"
+            subtitle: root.permissionClient.aiMode + "  •  "
+                + (root.permissionClient.aiModelAvailable
+                    ? (root.permissionClient.aiModelName.length > 0 ? root.permissionClient.aiModelName : "model ready")
+                    : "model unavailable")
+        }
+
+        ListRow {
+            title: "AI summary"
+            subtitle: root.permissionClient.aiLastSummary.length > 0
+                ? root.permissionClient.aiLastSummary
+                : "No AI summary yet"
+        }
+
         Rectangle {
             Layout.fillWidth: true
             visible: !root.showAdvanced

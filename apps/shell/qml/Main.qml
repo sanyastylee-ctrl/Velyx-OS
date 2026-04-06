@@ -46,6 +46,7 @@ ApplicationWindow {
         permissionClient.refreshIntents()
         permissionClient.refreshRules()
         permissionClient.refreshAgentState()
+        permissionClient.refreshAiState()
         permissionClient.refreshOpenApps()
         permissionClient.refreshApps()
     }
@@ -132,6 +133,7 @@ ApplicationWindow {
             permissionClient.refreshIntents()
             permissionClient.refreshRules()
             permissionClient.refreshAgentState()
+            permissionClient.refreshAiState()
             permissionClient.refreshOpenApps()
             permissionClient.refreshSelectedAppRuntime()
             permissionClient.refreshApps()
@@ -257,6 +259,14 @@ ApplicationWindow {
                         value: permissionClient.currentVersion.length > 0 ? permissionClient.currentVersion : "unknown"
                         tone: "accent"
                     }
+
+                    StatusChip {
+                        compact: true
+                        label: "AI"
+                        value: permissionClient.aiMode
+                        tone: permissionClient.aiMode === "auto" ? "warning"
+                            : (permissionClient.aiMode === "suggest" ? "accent" : "neutral")
+                    }
                 }
             }
 
@@ -292,6 +302,7 @@ ApplicationWindow {
                                 permissionClient.refreshIntents()
                                 permissionClient.refreshRules()
                                 permissionClient.refreshAgentState()
+                                permissionClient.refreshAiState()
                                 permissionClient.refreshOpenApps()
                                 permissionClient.refreshApps()
                             }
@@ -468,6 +479,11 @@ ApplicationWindow {
                     Layout.preferredWidth: 390
                     Layout.fillHeight: true
                     spacing: Theme.space4
+
+                    AiSuggestionPanel {
+                        Layout.fillWidth: true
+                        permissionClient: permissionClient
+                    }
 
                     AgentPanel {
                         Layout.fillWidth: true

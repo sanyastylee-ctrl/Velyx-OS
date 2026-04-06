@@ -1,0 +1,955 @@
+#!/usr/bin/env python3
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV_FILE_VALUES = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV_FILE_VALUES.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+APP_REGISTRY = Path(ENV_FILE_VALUES.get("VELYX_APP_REGISTRY") or (STATE_DIR / "apps_registry.json"))
+SPACES_REGISTRY = Path(ENV_FILE_VALUES.get("VELYX_SPACES_REGISTRY") or (STATE_DIR / "spaces_registry.json"))
+INTENTS_REGISTRY = Path(ENV_FILE_VALUES.get("VELYX_INTENTS_REGISTRY") or (STATE_DIR / "intents_registry.json"))
+RULES_REGISTRY = Path(ENV_FILE_VALUES.get("VELYX_RULES_REGISTRY") or (STATE_DIR / "rules_registry.json"))
+SESSION_STATE = STATE_DIR / "session_state.json"
+UPDATE_STATE = STATE_DIR / "update_state.json"
+INTENT_STATE = STATE_DIR / "intent_state.json"
+RULES_STATE = STATE_DIR / "rules_state.json"
+AGENT_STATE = STATE_DIR / "agent_state.json"
+AI_CONFIG = STATE_DIR / "ai_config.json"
+AI_STATE = STATE_DIR / "ai_state.json"
+AI_LOG = STATE_DIR / "ai.log"
+AI_FEEDBACK = STATE_DIR / "ai_feedback.log"
+DEFAULT_MIN_SUGGEST = 0.45
+DEFAULT_MIN_AUTO = 0.80
+SAFE_ACTION_TYPES = {
+    "run_intent",
+    "activate_space",
+    "launch_app",
+    "restart_app",
+    "stop_app",
+    "enter_recovery",
+    "restart_runtime",
+    "none",
+}
+
+
+def read_json(path: Path, default):
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+    return default
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with AI_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def record_feedback(event: str, payload: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    line = {
+        "timestamp": now_iso(),
+        "event": event,
+        **payload,
+    }
+    with AI_FEEDBACK.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps(line, ensure_ascii=False) + "\n")
+    log_event("ai_feedback_recorded", "ok", f"event={event}")
+
+
+def json_hash(payload: dict) -> str:
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def ensure_config() -> dict:
+    payload = read_json(AI_CONFIG, {})
+    defaults = {
+        "enabled": False,
+        "mode": "off",
+        "provider": "local",
+        "model_family": "qwen",
+        "model_name": "qwen3.5-9b",
+        "endpoint_type": "stub",
+        "endpoint_url": "http://127.0.0.1:11434",
+        "timeout_ms": 6000,
+        "max_tokens": 512,
+        "allow_auto_actions": False,
+        "allowed_auto_action_types": [],
+        "blocked_suggestion_action_types": [],
+        "requires_user_confirmation_types": ["enter_recovery", "restart_runtime"],
+        "collect_feedback": True,
+        "min_confidence_for_suggest": DEFAULT_MIN_SUGGEST,
+        "min_confidence_for_auto": DEFAULT_MIN_AUTO,
+    }
+    changed = False
+    for key, value in defaults.items():
+        if key not in payload:
+            payload[key] = value
+            changed = True
+    if changed or not AI_CONFIG.exists():
+        save_json(AI_CONFIG, payload)
+    return payload
+
+
+def ensure_state(config: dict) -> dict:
+    payload = read_json(AI_STATE, {})
+    defaults = {
+        "current_mode": config.get("mode", "off"),
+        "current_model": config.get("model_name", ""),
+        "last_summary": "",
+        "last_suggestion": {},
+        "last_action_proposal": {},
+        "last_error": "",
+        "last_run_at": "",
+        "model_available": False,
+        "last_context_hash": "",
+        "last_context_snapshot": {},
+        "last_trigger": "",
+        "last_suggestion_result": "",
+    }
+    changed = False
+    for key, value in defaults.items():
+        if key not in payload:
+            payload[key] = value
+            changed = True
+    if changed or not AI_STATE.exists():
+        save_json(AI_STATE, payload)
+    return payload
+
+
+class ContextBuilder:
+    def _session(self) -> dict:
+        return read_json(SESSION_STATE, {})
+
+    def _update(self) -> dict:
+        return read_json(UPDATE_STATE, {})
+
+    def _intent(self) -> dict:
+        return read_json(INTENT_STATE, {})
+
+    def _rules(self) -> dict:
+        return read_json(RULES_STATE, {})
+
+    def _agent(self) -> dict:
+        return read_json(AGENT_STATE, {})
+
+    def _intents_registry(self) -> dict:
+        return read_json(INTENTS_REGISTRY, {})
+
+    def _rules_registry(self) -> dict:
+        return read_json(RULES_REGISTRY, {})
+
+    def _spaces_registry(self) -> dict:
+        return read_json(SPACES_REGISTRY, {})
+
+    def _apps_registry(self) -> dict:
+        return read_json(APP_REGISTRY, {})
+
+    def build_system_context(self) -> dict:
+        session = self._session()
+        update = self._update()
+        intent = self._intent()
+        rules = self._rules()
+        agent = self._agent()
+        apps = session.get("apps", [])
+        running_apps = [app.get("app_id", "") for app in apps if app.get("state") == "running"]
+        failed_apps = [app.get("app_id", "") for app in apps if app.get("state") in {"failed", "broken"}]
+        active_space = session.get("active_space_id") or self._spaces_registry().get("active_space_id", "")
+        active_space_state = session.get("active_space_state", "")
+        return {
+            "current_version": update.get("current_version", ""),
+            "active_space": active_space,
+            "active_space_state": active_space_state,
+            "session_state": session.get("current_state", ""),
+            "session_health": "failed" if session.get("current_state") == "Failed" else str(session.get("current_state", "")).lower(),
+            "recovery_needed": update.get("recovery_needed", False),
+            "update_state": update.get("update_state", ""),
+            "last_update_result": update.get("last_update_result", ""),
+            "running_apps": running_apps,
+            "failed_apps": failed_apps,
+            "last_intent": intent.get("last_intent_id", ""),
+            "last_rule": rules.get("last_rule_id", ""),
+            "last_rule_result": rules.get("last_result", ""),
+            "last_agent_action": agent.get("last_action", ""),
+            "top_available_intents": [
+                {"intent_id": item.get("intent_id"), "target_space": item.get("target_space")}
+                for item in self._intents_registry().get("intents", [])[:5]
+            ],
+            "top_available_rules": [
+                {"rule_id": item.get("rule_id"), "trigger_type": item.get("trigger_type"), "action_type": item.get("action_type")}
+                for item in self._rules_registry().get("rules", [])[:5]
+            ],
+            "current_mode": active_space or "general",
+        }
+
+    def build_space_context(self) -> dict:
+        session = self._session()
+        spaces_registry = self._spaces_registry()
+        active_space = spaces_registry.get("active_space_id", session.get("active_space_id", ""))
+        spaces = spaces_registry.get("spaces", [])
+        active = next((item for item in spaces if item.get("space_id") == active_space), {})
+        running_here = [
+            app.get("app_id", "")
+            for app in session.get("apps", [])
+            if app.get("in_active_space") is True and app.get("state") == "running"
+        ]
+        return {
+            "space_id": active.get("space_id", active_space),
+            "display_name": active.get("display_name", active_space),
+            "runtime_state": session.get("active_space_state", active.get("runtime_state", "")),
+            "security_mode": active.get("security_mode", ""),
+            "preferred_active_app": active.get("preferred_active_app", ""),
+            "required_apps": active.get("required_apps", []),
+            "autostart_apps": active.get("autostart_apps", []),
+            "running_in_space": running_here,
+        }
+
+    def build_operator_context(self) -> dict:
+        agent = self._agent()
+        return {
+            "last_action": agent.get("last_action", ""),
+            "last_result": agent.get("last_result", ""),
+            "last_message": agent.get("last_message", ""),
+            "last_summary": agent.get("last_summary", ""),
+        }
+
+    def build_snapshot(self) -> dict:
+        return {
+            "system": self.build_system_context(),
+            "space": self.build_space_context(),
+            "operator": self.build_operator_context(),
+        }
+
+
+class PromptBuilder:
+    def build_summary_prompt(self, snapshot: dict) -> str:
+        return json.dumps(
+            {
+                "task": "summarize_system",
+                "instructions": "Provide a concise operational summary for the current Velyx runtime.",
+                "context": snapshot,
+            },
+            ensure_ascii=False,
+        )
+
+    def build_explain_prompt(self, snapshot: dict) -> str:
+        return json.dumps(
+            {
+                "task": "explain_current_state",
+                "instructions": "Explain the current system state and why it looks this way. Keep it operational and concise.",
+                "context": snapshot,
+            },
+            ensure_ascii=False,
+        )
+
+    def build_suggestion_prompt(self, snapshot: dict, trigger: str) -> str:
+        return json.dumps(
+            {
+                "task": "suggest_next_action",
+                "instructions": "Return one structured suggestion for the next safe action in Velyx.",
+                "trigger": trigger,
+                "context": snapshot,
+            },
+            ensure_ascii=False,
+        )
+
+
+class StubModelAdapter:
+    def __init__(self, config: dict) -> None:
+        self.config = config
+
+    def ping(self) -> bool:
+        return True
+
+    def generate(self, task: str, snapshot: dict, trigger: str = "manual") -> dict:
+        system = snapshot["system"]
+        space = snapshot["space"]
+        running_in_space = len(space.get("running_in_space", []))
+        recommendation = {
+            "summary": f"Space={space.get('display_name') or space.get('space_id') or '-'} | session={system.get('session_state') or '-'} | update={system.get('update_state') or '-'}",
+            "confidence": 0.52,
+            "recommended_action_type": "none",
+            "recommended_action_payload": {},
+            "reason": "No strong action is required right now.",
+            "user_message": "System context looks stable. No immediate action is recommended.",
+            "safe_to_auto_run": False,
+        }
+
+        if system.get("recovery_needed") or system.get("update_state") == "failed":
+            recommendation.update(
+                {
+                    "summary": "Recovery attention is needed.",
+                    "confidence": 0.94,
+                    "recommended_action_type": "run_intent",
+                    "recommended_action_payload": {"intent_id": "recovery_mode"},
+                    "reason": "The update or recovery state indicates the system should move into recovery context.",
+                    "user_message": "Recovery context is recommended before continuing normal work.",
+                    "safe_to_auto_run": False,
+                }
+            )
+        elif task == "summarize_system":
+            recommendation["user_message"] = (
+                f"Velyx is in {system.get('session_state') or 'unknown'} state, active space is "
+                f"{space.get('display_name') or space.get('space_id') or 'none'}, "
+                f"running apps: {len(system.get('running_apps', []))}."
+            )
+        elif task == "explain_current_state":
+            recommendation["user_message"] = (
+                f"The active space is {space.get('display_name') or space.get('space_id') or 'none'}. "
+                f"Session health is {system.get('session_health') or 'unknown'}, "
+                f"and last intent was {system.get('last_intent') or 'none'}."
+            )
+        elif system.get("active_space") == "development" and running_in_space == 0:
+            recommendation.update(
+                {
+                    "summary": "Development space is active but not populated.",
+                    "confidence": 0.88,
+                    "recommended_action_type": "run_intent",
+                    "recommended_action_payload": {"intent_id": "dev_start"},
+                    "reason": "Development context is active and no apps are currently serving it.",
+                    "user_message": "Start Development is recommended to bring the workspace into a working state.",
+                    "safe_to_auto_run": True,
+                }
+            )
+        elif system.get("active_space") == "safe-web" and running_in_space == 0:
+            recommendation.update(
+                {
+                    "summary": "Safe Web is selected and browser context is empty.",
+                    "confidence": 0.84,
+                    "recommended_action_type": "run_intent",
+                    "recommended_action_payload": {"intent_id": "safe_browse"},
+                    "reason": "Safe browsing context is active without its serving app set.",
+                    "user_message": "Safe Browse is recommended to restore the focused web context.",
+                    "safe_to_auto_run": True,
+                }
+            )
+        elif not system.get("active_space") and task == "suggest_next_action":
+            recommendation.update(
+                {
+                    "summary": "No active space is selected.",
+                    "confidence": 0.75,
+                    "recommended_action_type": "activate_space",
+                    "recommended_action_payload": {"space_id": "general"},
+                    "reason": "Velyx works best when a clear context is active.",
+                    "user_message": "General is recommended as the default context.",
+                    "safe_to_auto_run": True,
+                }
+            )
+        elif task == "suggest_next_action" and trigger in {"session_ready", "idle_context"}:
+            recommendation.update(
+                {
+                    "summary": "The session is ready and a stable context can be resumed.",
+                    "confidence": 0.61,
+                    "recommended_action_type": "run_intent",
+                    "recommended_action_payload": {"intent_id": "general_use"},
+                    "reason": "General intent is the safest default context when the session is ready.",
+                    "user_message": "Continue Work is recommended to re-enter the default space.",
+                    "safe_to_auto_run": True,
+                }
+            )
+
+        return recommendation
+
+
+class OpenAICompatibleAdapter:
+    def __init__(self, config: dict) -> None:
+        self.config = config
+
+    def _request(self, payload: dict) -> dict:
+        request = urllib.request.Request(
+            self.config.get("endpoint_url", "").rstrip("/") + "/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.config.get("timeout_ms", 6000) / 1000.0) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def ping(self) -> bool:
+        try:
+            self._request(
+                {
+                    "model": self.config.get("model_name"),
+                    "messages": [{"role": "user", "content": "Return JSON only."}],
+                    "max_tokens": 32,
+                }
+            )
+            return True
+        except Exception:
+            return False
+
+    def generate(self, task: str, snapshot: dict, trigger: str = "manual") -> dict:
+        prompt_builder = PromptBuilder()
+        prompt = prompt_builder.build_suggestion_prompt(snapshot, trigger) if task == "suggest_next_action" else (
+            prompt_builder.build_explain_prompt(snapshot) if task == "explain_current_state" else prompt_builder.build_summary_prompt(snapshot)
+        )
+        response = self._request(
+            {
+                "model": self.config.get("model_name"),
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "Return strict JSON with keys: summary, confidence, recommended_action_type, recommended_action_payload, reason, user_message, safe_to_auto_run.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": self.config.get("max_tokens", 512),
+            }
+        )
+        content = response.get("choices", [{}])[0].get("message", {}).get("content", "")
+        return {"raw_text": content}
+
+
+class OllamaCompatibleAdapter:
+    def __init__(self, config: dict) -> None:
+        self.config = config
+
+    def _request(self, payload: dict) -> dict:
+        base = self.config.get("endpoint_url", "http://127.0.0.1:11434").rstrip("/")
+        request = urllib.request.Request(
+            base + "/api/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.config.get("timeout_ms", 6000) / 1000.0) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def ping(self) -> bool:
+        try:
+            self._request({"model": self.config.get("model_name"), "prompt": "Return JSON only.", "stream": False})
+            return True
+        except Exception:
+            return False
+
+    def generate(self, task: str, snapshot: dict, trigger: str = "manual") -> dict:
+        prompt_builder = PromptBuilder()
+        prompt = prompt_builder.build_suggestion_prompt(snapshot, trigger) if task == "suggest_next_action" else (
+            prompt_builder.build_explain_prompt(snapshot) if task == "explain_current_state" else prompt_builder.build_summary_prompt(snapshot)
+        )
+        response = self._request(
+            {
+                "model": self.config.get("model_name"),
+                "prompt": "Return strict JSON with keys: summary, confidence, recommended_action_type, recommended_action_payload, reason, user_message, safe_to_auto_run.\n" + prompt,
+                "stream": False,
+            }
+        )
+        return {"raw_text": response.get("response", "")}
+
+
+class ResponseParser:
+    def parse(self, payload: dict, fallback_summary: str) -> dict:
+        required = {
+            "summary",
+            "confidence",
+            "recommended_action_type",
+            "recommended_action_payload",
+            "reason",
+            "user_message",
+            "safe_to_auto_run",
+        }
+        if required.issubset(payload.keys()):
+            return self._normalize(payload, fallback_summary)
+        raw = payload.get("raw_text", "")
+        if raw:
+            try:
+                start = raw.find("{")
+                end = raw.rfind("}")
+                if start != -1 and end != -1 and end > start:
+                    return self._normalize(json.loads(raw[start:end + 1]), fallback_summary)
+            except Exception:
+                pass
+        return self._normalize(
+            {
+                "summary": fallback_summary,
+                "confidence": 0.0,
+                "recommended_action_type": "none",
+                "recommended_action_payload": {},
+                "reason": "Model response could not be parsed. Falling back to summary only.",
+                "user_message": fallback_summary,
+                "safe_to_auto_run": False,
+            },
+            fallback_summary,
+        )
+
+    def _normalize(self, payload: dict, fallback_summary: str) -> dict:
+        action_type = str(payload.get("recommended_action_type", "none"))
+        if action_type not in SAFE_ACTION_TYPES:
+            action_type = "none"
+        confidence = float(payload.get("confidence", 0.0) or 0.0)
+        confidence = max(0.0, min(confidence, 1.0))
+        return {
+            "summary": str(payload.get("summary") or fallback_summary),
+            "confidence": confidence,
+            "recommended_action_type": action_type,
+            "recommended_action_payload": payload.get("recommended_action_payload") or {},
+            "reason": str(payload.get("reason") or ""),
+            "user_message": str(payload.get("user_message") or fallback_summary),
+            "safe_to_auto_run": bool(payload.get("safe_to_auto_run", False)),
+        }
+
+
+@dataclass
+class SafeAction:
+    action_type: str
+    payload: dict
+    agent_args: list
+
+
+class SafeActionTranslator:
+    def translate(self, suggestion: dict) -> Optional[SafeAction]:
+        action_type = suggestion.get("recommended_action_type", "none")
+        payload = suggestion.get("recommended_action_payload") or {}
+        if action_type == "none":
+            return None
+        if action_type == "run_intent" and payload.get("intent_id"):
+            return SafeAction(action_type, payload, ["run-intent", payload["intent_id"]])
+        if action_type == "activate_space" and payload.get("space_id"):
+            return SafeAction(action_type, payload, ["switch-space", payload["space_id"]])
+        if action_type == "launch_app" and payload.get("app_id"):
+            return SafeAction(action_type, payload, ["launch-app", payload["app_id"]])
+        if action_type == "restart_app" and payload.get("app_id"):
+            return SafeAction(action_type, payload, ["restart-app", payload["app_id"]])
+        if action_type == "stop_app" and payload.get("app_id"):
+            return SafeAction(action_type, payload, ["stop-app", payload["app_id"]])
+        if action_type == "enter_recovery":
+            return SafeAction(action_type, payload, ["enter-recovery"])
+        if action_type == "restart_runtime":
+            return SafeAction(action_type, payload, ["command", "restart-runtime"])
+        return None
+
+
+class AgentDispatcher:
+    def dispatch(self, safe_action: SafeAction) -> tuple[bool, str]:
+        tool = shutil.which("velyx-agent")
+        if not tool:
+            return False, "velyx-agent unavailable"
+        result = subprocess.run([tool, *safe_action.agent_args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return result.returncode == 0, (result.stdout.strip() or result.stderr.strip())
+
+
+class ModelAdapterFactory:
+    @staticmethod
+    def build(config: dict):
+        endpoint_type = config.get("endpoint_type", "stub")
+        if endpoint_type == "ollama-compatible":
+            return OllamaCompatibleAdapter(config)
+        if endpoint_type == "openai-compatible":
+            return OpenAICompatibleAdapter(config)
+        return StubModelAdapter(config)
+
+
+class AiEngine:
+    def __init__(self) -> None:
+        self.config = ensure_config()
+        self.state = ensure_state(self.config)
+        self.context_builder = ContextBuilder()
+        self.parser = ResponseParser()
+        self.translator = SafeActionTranslator()
+        self.dispatcher = AgentDispatcher()
+        self.adapter = ModelAdapterFactory.build(self.config)
+
+    def _save_state(self) -> None:
+        save_json(AI_STATE, self.state)
+
+    def _update_model_availability(self) -> None:
+        available = False
+        try:
+            available = self.adapter.ping()
+        except Exception as exc:
+            self.state["last_error"] = str(exc)
+        self.state["model_available"] = available
+        self.state["current_mode"] = self.config.get("mode", "off")
+        self.state["current_model"] = self.config.get("model_name", "")
+
+    def _generate(self, task: str, trigger: str = "manual") -> tuple[dict, dict]:
+        snapshot = self.context_builder.build_snapshot()
+        log_event("ai_context_built", "ok", f"task={task} trigger={trigger}")
+        self._update_model_availability()
+        log_event("ai_request_begin", "started", f"task={task} trigger={trigger}")
+        raw = self.adapter.generate(task, snapshot, trigger)
+        parsed = self.parser.parse(raw, fallback_summary=f"AI {task} completed.")
+        log_event("ai_request_ok", "ok", f"task={task} trigger={trigger}")
+        log_event("ai_response_parsed", "ok", f"task={task} action={parsed.get('recommended_action_type')}")
+        return snapshot, parsed
+
+    def summary(self) -> str:
+        snapshot, parsed = self._generate("summarize_system")
+        self.state["last_summary"] = parsed["user_message"]
+        self.state["last_run_at"] = now_iso()
+        self.state["last_context_snapshot"] = snapshot
+        self.state["last_context_hash"] = json_hash(snapshot)
+        self._save_state()
+        return parsed["user_message"]
+
+    def explain(self) -> str:
+        snapshot, parsed = self._generate("explain_current_state")
+        self.state["last_summary"] = parsed["user_message"]
+        self.state["last_run_at"] = now_iso()
+        self.state["last_context_snapshot"] = snapshot
+        self.state["last_context_hash"] = json_hash(snapshot)
+        self._save_state()
+        return parsed["user_message"]
+
+    def _detect_trigger(self, snapshot: dict) -> str:
+        previous = self.state.get("last_context_snapshot", {}) or {}
+        previous_system = previous.get("system", {})
+        system = snapshot["system"]
+        if previous_system.get("session_state") != "Ready" and system.get("session_state") == "Ready":
+            return "session_ready"
+        if previous_system.get("active_space") != system.get("active_space"):
+            return "active_space_changed"
+        if system.get("update_state") == "failed" and previous_system.get("update_state") != "failed":
+            return "update_failed"
+        if system.get("update_state") == "committed" and previous_system.get("update_state") != "committed":
+            return "update_succeeded"
+        if system.get("recovery_needed") and not previous_system.get("recovery_needed"):
+            return "recovery_needed"
+        if not snapshot["space"].get("running_in_space") and system.get("active_space"):
+            return "no_active_app_in_current_space"
+        if not system.get("running_apps"):
+            return "idle_context"
+        return ""
+
+    def suggest(self, trigger: str = "manual", manual: bool = False) -> str:
+        if self.config.get("mode") == "off":
+            raise RuntimeError("AI suggestions are disabled while mode is off")
+        snapshot = self.context_builder.build_snapshot()
+        inferred_trigger = trigger if trigger != "auto" else self._detect_trigger(snapshot)
+        if not manual and not inferred_trigger:
+            self.state["last_context_snapshot"] = snapshot
+            self.state["last_context_hash"] = json_hash(snapshot)
+            self.state["last_run_at"] = now_iso()
+            self._save_state()
+            return "AI tick: no new predictive trigger"
+
+        active_trigger = inferred_trigger or "manual"
+        snapshot, parsed = self._generate("suggest_next_action", active_trigger)
+        suggestion = {
+            **parsed,
+            "trigger": active_trigger,
+            "created_at": now_iso(),
+            "dismissed": False,
+        }
+        self.state["last_summary"] = parsed["summary"]
+        self.state["last_suggestion"] = suggestion
+        self.state["last_action_proposal"] = {
+            "type": parsed["recommended_action_type"],
+            "payload": parsed["recommended_action_payload"],
+        }
+        self.state["last_suggestion_result"] = "suggested"
+        self.state["last_run_at"] = now_iso()
+        self.state["last_context_snapshot"] = snapshot
+        self.state["last_context_hash"] = json_hash(snapshot)
+        self.state["last_trigger"] = active_trigger
+        self._save_state()
+        log_event("ai_suggestion_created", "ok", f"trigger={active_trigger} action={parsed['recommended_action_type']} confidence={parsed['confidence']}")
+
+        if parsed["recommended_action_type"] in self.config.get("blocked_suggestion_action_types", []):
+            self.state["last_suggestion_result"] = "blocked"
+            self.state["last_suggestion"]["dismissed"] = True
+            self._save_state()
+            if self.config.get("collect_feedback", True):
+                record_feedback(
+                    "suggestion_blocked",
+                    {
+                        "context": snapshot,
+                        "suggestion": suggestion,
+                        "reason": "blocked_action_type",
+                    },
+                )
+            log_event("ai_auto_action_blocked", "blocked", f"reason=blocked_action_type type={parsed['recommended_action_type']}")
+            return "Suggestion type is blocked by user policy"
+
+        if self.config.get("collect_feedback", True):
+            record_feedback(
+                "suggestion_shown",
+                {
+                    "context": snapshot,
+                    "suggestion": suggestion,
+                    "mode": self.config.get("mode", "off"),
+                },
+            )
+        log_event("ai_suggestion_shown", "ok", f"trigger={active_trigger}")
+
+        if self.config.get("mode") == "auto":
+            return self._attempt_auto_run(snapshot, suggestion)
+        return parsed["user_message"]
+
+    def _attempt_auto_run(self, snapshot: dict, suggestion: dict) -> str:
+        action_type = suggestion.get("recommended_action_type", "none")
+        confidence = float(suggestion.get("confidence", 0.0) or 0.0)
+        if not self.config.get("allow_auto_actions", False):
+            log_event("ai_auto_action_blocked", "blocked", "reason=auto_actions_disabled")
+            return suggestion["user_message"]
+        if action_type not in self.config.get("allowed_auto_action_types", []):
+            log_event("ai_auto_action_blocked", "blocked", f"reason=action_not_allowed type={action_type}")
+            return suggestion["user_message"]
+        if action_type in self.config.get("requires_user_confirmation_types", []):
+            log_event("ai_auto_action_blocked", "blocked", f"reason=confirmation_required type={action_type}")
+            return suggestion["user_message"]
+        if confidence < float(self.config.get("min_confidence_for_auto", DEFAULT_MIN_AUTO)):
+            log_event("ai_auto_action_blocked", "blocked", f"reason=confidence type={action_type} value={confidence}")
+            return suggestion["user_message"]
+        if not suggestion.get("safe_to_auto_run", False):
+            log_event("ai_auto_action_blocked", "blocked", f"reason=unsafe type={action_type}")
+            return suggestion["user_message"]
+        safe_action = self.translator.translate(suggestion)
+        if safe_action is None:
+            log_event("ai_auto_action_blocked", "blocked", "reason=translation_failed")
+            return suggestion["user_message"]
+        ok, message = self.dispatcher.dispatch(safe_action)
+        self.state["last_suggestion_result"] = "auto_executed" if ok else "auto_failed"
+        self._save_state()
+        if self.config.get("collect_feedback", True):
+            record_feedback(
+                "auto_action_executed" if ok else "suggestion_blocked",
+                {
+                    "context": snapshot,
+                    "suggestion": suggestion,
+                    "result": "ok" if ok else "failed",
+                    "message": message,
+                },
+            )
+        log_event("ai_auto_action_executed" if ok else "ai_auto_action_blocked", "ok" if ok else "failed", f"type={safe_action.action_type} message={message}")
+        return message if ok else suggestion["user_message"]
+
+    def run_last_suggestion(self) -> str:
+        suggestion = self.state.get("last_suggestion", {}) or {}
+        if not suggestion or suggestion.get("dismissed"):
+            raise RuntimeError("No AI suggestion is available")
+        safe_action = self.translator.translate(suggestion)
+        if safe_action is None:
+            raise RuntimeError("Last suggestion cannot be translated into a safe action")
+        ok, message = self.dispatcher.dispatch(safe_action)
+        self.state["last_suggestion_result"] = "accepted" if ok else "failed"
+        self.state["last_run_at"] = now_iso()
+        self._save_state()
+        if self.config.get("collect_feedback", True):
+            record_feedback(
+                "suggestion_accepted" if ok else "suggestion_blocked",
+                {
+                    "context": self.state.get("last_context_snapshot", {}),
+                    "suggestion": suggestion,
+                    "result": "ok" if ok else "failed",
+                    "message": message,
+                },
+            )
+        log_event("ai_suggestion_accepted" if ok else "ai_auto_action_blocked", "ok" if ok else "failed", f"message={message}")
+        if not ok:
+            raise RuntimeError(message)
+        return message
+
+    def dismiss_last_suggestion(self) -> str:
+        suggestion = self.state.get("last_suggestion", {}) or {}
+        if not suggestion:
+            raise RuntimeError("No AI suggestion to dismiss")
+        suggestion["dismissed"] = True
+        self.state["last_suggestion"] = suggestion
+        self.state["last_suggestion_result"] = "dismissed"
+        self.state["last_run_at"] = now_iso()
+        self._save_state()
+        if self.config.get("collect_feedback", True):
+            record_feedback(
+                "suggestion_dismissed",
+                {
+                    "context": self.state.get("last_context_snapshot", {}),
+                    "suggestion": suggestion,
+                },
+            )
+        log_event("ai_suggestion_dismissed", "ok", f"type={suggestion.get('recommended_action_type', 'none')}")
+        return "Suggestion dismissed"
+
+    def block_last_suggestion(self) -> str:
+        suggestion = self.state.get("last_suggestion", {}) or {}
+        if not suggestion:
+            raise RuntimeError("No AI suggestion to block")
+        action_type = suggestion.get("recommended_action_type", "none")
+        blocked = list(self.config.get("blocked_suggestion_action_types", []))
+        if action_type not in blocked and action_type != "none":
+            blocked.append(action_type)
+            self.config["blocked_suggestion_action_types"] = blocked
+            save_json(AI_CONFIG, self.config)
+        suggestion["dismissed"] = True
+        self.state["last_suggestion"] = suggestion
+        self.state["last_suggestion_result"] = "blocked"
+        self.state["last_run_at"] = now_iso()
+        self._save_state()
+        if self.config.get("collect_feedback", True):
+            record_feedback(
+                "suggestion_blocked",
+                {
+                    "context": self.state.get("last_context_snapshot", {}),
+                    "suggestion": suggestion,
+                    "reason": "user_never_suggest",
+                },
+            )
+        log_event("ai_suggestion_dismissed", "ok", f"blocked_type={action_type}")
+        return f"Suggestion type blocked: {action_type}"
+
+    def set_mode(self, mode: str) -> str:
+        if mode not in {"off", "suggest", "auto"}:
+            raise RuntimeError(f"Unsupported AI mode: {mode}")
+        self.config["mode"] = mode
+        self.config["enabled"] = mode != "off"
+        if mode != "auto":
+            self.config["allow_auto_actions"] = False
+        save_json(AI_CONFIG, self.config)
+        self.state["current_mode"] = mode
+        self.state["last_run_at"] = now_iso()
+        self._save_state()
+        log_event("ai_mode_changed", "ok", f"mode={mode}")
+        return f"AI mode set to {mode}"
+
+    def status(self) -> str:
+        self._update_model_availability()
+        self._save_state()
+        return json.dumps(
+            {
+                "mode": self.config.get("mode"),
+                "provider": self.config.get("provider"),
+                "model_family": self.config.get("model_family"),
+                "model_name": self.config.get("model_name"),
+                "endpoint_type": self.config.get("endpoint_type"),
+                "model_available": self.state.get("model_available", False),
+                "last_suggestion_result": self.state.get("last_suggestion_result", ""),
+                "last_error": self.state.get("last_error", ""),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    def mode(self) -> str:
+        return self.config.get("mode", "off")
+
+    def config_text(self) -> str:
+        return json.dumps(self.config, ensure_ascii=False, indent=2)
+
+    def export_training_data(self, target_path: Optional[str]) -> str:
+        lines = []
+        if AI_FEEDBACK.exists():
+            lines = AI_FEEDBACK.read_text(encoding="utf-8").splitlines()
+        if target_path:
+            Path(target_path).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+            return target_path
+        return "\n".join(lines)
+
+    def ping_model(self) -> str:
+        self._update_model_availability()
+        self._save_state()
+        return "available" if self.state.get("model_available", False) else "unavailable"
+
+    def tick(self) -> str:
+        mode = self.config.get("mode", "off")
+        self.state["current_mode"] = mode
+        self.state["current_model"] = self.config.get("model_name", "")
+        if mode == "off":
+            self.state["last_run_at"] = now_iso()
+            self._save_state()
+            return "AI mode is off"
+        return self.suggest(trigger="auto", manual=False)
+
+
+def usage() -> int:
+    print(
+        "usage: velyx-ai status | mode | set-mode off|suggest|auto | summary | explain | suggest | tick | run-last-suggestion | dismiss-last-suggestion | block-last-suggestion | export-training-data [path] | config | ping-model",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return usage()
+
+    engine = AiEngine()
+    command = sys.argv[1]
+
+    try:
+        if command == "status":
+            print(engine.status())
+        elif command == "mode":
+            print(engine.mode())
+        elif command == "set-mode":
+            if len(sys.argv) < 3:
+                return usage()
+            print(engine.set_mode(sys.argv[2]))
+        elif command == "summary":
+            print(engine.summary())
+        elif command == "explain":
+            print(engine.explain())
+        elif command == "suggest":
+            print(engine.suggest(trigger="manual", manual=True))
+        elif command == "tick":
+            print(engine.tick())
+        elif command == "run-last-suggestion":
+            print(engine.run_last_suggestion())
+        elif command == "dismiss-last-suggestion":
+            print(engine.dismiss_last_suggestion())
+        elif command == "block-last-suggestion":
+            print(engine.block_last_suggestion())
+        elif command == "export-training-data":
+            target = sys.argv[2] if len(sys.argv) >= 3 else None
+            print(engine.export_training_data(target))
+        elif command == "config":
+            print(engine.config_text())
+        elif command == "ping-model":
+            print(engine.ping_model())
+        else:
+            return usage()
+    except RuntimeError as exc:
+        engine.state["last_error"] = str(exc)
+        engine.state["last_run_at"] = now_iso()
+        engine._save_state()
+        log_event("ai_request_failed", "failed", f"command={command} error={exc}")
+        print(str(exc), file=sys.stderr)
+        return 1
+    except urllib.error.URLError as exc:
+        engine.state["last_error"] = str(exc)
+        engine.state["last_run_at"] = now_iso()
+        engine._save_state()
+        log_event("ai_request_failed", "failed", f"command={command} error=network")
+        print(f"AI endpoint unavailable: {exc}", file=sys.stderr)
+        return 1
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

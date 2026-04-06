@@ -46,6 +46,17 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString agentSummary READ agentSummary NOTIFY agentStateChanged)
     Q_PROPERTY(QString lastAgentAction READ lastAgentAction NOTIFY agentStateChanged)
     Q_PROPERTY(QString lastAgentResult READ lastAgentResult NOTIFY agentStateChanged)
+    Q_PROPERTY(QString aiMode READ aiMode NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiProvider READ aiProvider NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiModelName READ aiModelName NOTIFY aiStateChanged)
+    Q_PROPERTY(bool aiModelAvailable READ aiModelAvailable NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiLastSummary READ aiLastSummary NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiSuggestionMessage READ aiSuggestionMessage NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiSuggestionActionType READ aiSuggestionActionType NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiSuggestionReason READ aiSuggestionReason NOTIFY aiStateChanged)
+    Q_PROPERTY(double aiSuggestionConfidence READ aiSuggestionConfidence NOTIFY aiStateChanged)
+    Q_PROPERTY(bool aiSuggestionAvailable READ aiSuggestionAvailable NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiLastError READ aiLastError NOTIFY aiStateChanged)
     Q_PROPERTY(QString activeSpaceId READ activeSpaceId NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceName READ activeSpaceName NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceState READ activeSpaceState NOTIFY spacesChanged)
@@ -61,6 +72,7 @@ public:
     Q_INVOKABLE void refreshIntents();
     Q_INVOKABLE void refreshRules();
     Q_INVOKABLE void refreshAgentState();
+    Q_INVOKABLE void refreshAiState();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
     Q_INVOKABLE void selectActiveApp(const QString &appId);
@@ -84,6 +96,13 @@ public:
     Q_INVOKABLE void runIntent(const QString &intentId);
     Q_INVOKABLE void runRule(const QString &ruleId);
     Q_INVOKABLE void runAgentCommand(const QString &command);
+    Q_INVOKABLE void setAiMode(const QString &mode);
+    Q_INVOKABLE void runAiSummary();
+    Q_INVOKABLE void runAiExplain();
+    Q_INVOKABLE void runAiSuggest();
+    Q_INVOKABLE void applyAiSuggestion();
+    Q_INVOKABLE void dismissAiSuggestion();
+    Q_INVOKABLE void blockAiSuggestion();
     void setInputControlMode(const QString &mode, const QString &details);
 
     QVariantList apps() const;
@@ -122,6 +141,17 @@ public:
     QString agentSummary() const;
     QString lastAgentAction() const;
     QString lastAgentResult() const;
+    QString aiMode() const;
+    QString aiProvider() const;
+    QString aiModelName() const;
+    bool aiModelAvailable() const;
+    QString aiLastSummary() const;
+    QString aiSuggestionMessage() const;
+    QString aiSuggestionActionType() const;
+    QString aiSuggestionReason() const;
+    double aiSuggestionConfidence() const;
+    bool aiSuggestionAvailable() const;
+    QString aiLastError() const;
     QString activeSpaceId() const;
     QString activeSpaceName() const;
     QString activeSpaceState() const;
@@ -148,6 +178,7 @@ signals:
     void activeAppChanged();
     void inputStatusChanged();
     void agentStateChanged();
+    void aiStateChanged();
 
 private:
     QVariantMap cachedAppInfo(const QString &appId) const;
@@ -212,6 +243,17 @@ private:
     QString m_agentSummary;
     QString m_lastAgentAction;
     QString m_lastAgentResult;
+    QString m_aiMode {"off"};
+    QString m_aiProvider {"local"};
+    QString m_aiModelName;
+    bool m_aiModelAvailable {false};
+    QString m_aiLastSummary;
+    QString m_aiSuggestionMessage;
+    QString m_aiSuggestionActionType;
+    QString m_aiSuggestionReason;
+    double m_aiSuggestionConfidence {0.0};
+    bool m_aiSuggestionAvailable {false};
+    QString m_aiLastError;
     QString m_activeSpaceId;
     QString m_activeSpaceName;
     QString m_activeSpaceState {"unknown"};

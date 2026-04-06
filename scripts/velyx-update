@@ -330,6 +330,9 @@ perform_rollback() {
     if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-rule" ]]; then
       "${PREFIX}/bin/velyx-rule" seed-defaults >/dev/null || true
     fi
+    if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-ai" ]]; then
+      "${PREFIX}/bin/velyx-ai" status >/dev/null || true
+    fi
     if health_check; then
       CURRENT_VERSION="$(read_installed_version)"
       rm -rf "${ROLLBACK_PREFIX}.tmp"
@@ -447,6 +450,7 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-intent" \
   "${STAGING_PREFIX}/bin/velyx-rule" \
   "${STAGING_PREFIX}/bin/velyx-agent" \
+  "${STAGING_PREFIX}/bin/velyx-ai" \
   "${STAGING_PREFIX}/bin/velyx-shell" \
   "${STAGING_PREFIX}/libexec/velyx-user-session-bootstrap" \
   "${STAGING_PREFIX}/libexec/velyx-recovery-bootstrap" \
@@ -504,6 +508,9 @@ if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-intent" ]]; 
 fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-rule" ]]; then
   "${PREFIX}/bin/velyx-rule" seed-defaults >/dev/null || true
+fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-ai" ]]; then
+  "${PREFIX}/bin/velyx-ai" status >/dev/null || true
 fi
 log_event "update_apply_ok" "ok" "candidate_version=${CANDIDATE_VERSION}"
 
