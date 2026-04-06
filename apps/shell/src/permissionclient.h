@@ -14,6 +14,7 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString selectedAppId READ selectedAppId NOTIFY selectedAppInfoChanged)
     Q_PROPERTY(QString activeAppId READ activeAppId NOTIFY activeAppChanged)
     Q_PROPERTY(QString activeAppTitle READ activeAppTitle NOTIFY activeAppChanged)
+    Q_PROPERTY(QString activeWindowId READ activeWindowId NOTIFY activeAppChanged)
     Q_PROPERTY(QString launchStatus READ launchStatus NOTIFY launchStatusChanged)
     Q_PROPERTY(QString launchResultMessage READ launchResultMessage NOTIFY launchResultMessageChanged)
     Q_PROPERTY(QString lastAction READ lastAction NOTIFY statusDetailsChanged)
@@ -53,6 +54,7 @@ public:
     QString selectedAppId() const;
     QString activeAppId() const;
     QString activeAppTitle() const;
+    QString activeWindowId() const;
     QString launchStatus() const;
     QString launchResultMessage() const;
     QString lastAction() const;
@@ -88,6 +90,9 @@ private:
         const QString &appName,
         const QString &permission);
     QVariantMap fetchAppRuntime(const QString &appId);
+    QVariantMap discoverWindowForPid(const QString &pid) const;
+    QString querySystemActiveWindowId() const;
+    bool focusWindow(const QString &windowId) const;
     void updateActiveApp(const QString &appId, bool userInitiated);
     void reconcileActiveApp();
     void logShellEvent(const QString &action, const QString &appId, const QString &details);
@@ -106,6 +111,7 @@ private:
     QVariantMap m_selectedAppInfo;
     QString m_activeAppId;
     QString m_activeAppTitle;
+    QString m_activeWindowId;
     QString m_pendingAppId;
     QString m_pendingAppName;
     QString m_pendingPermission;

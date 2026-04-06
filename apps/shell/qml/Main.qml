@@ -171,6 +171,14 @@ ApplicationWindow {
                     ? permissionClient.activeAppTitle + " (" + permissionClient.activeAppId + ")"
                     : "Нет активного приложения"
             }
+
+            ListRow {
+                Layout.fillWidth: true
+                title: "Active window"
+                subtitle: permissionClient.activeWindowId.length > 0
+                    ? permissionClient.activeWindowId
+                    : "Окно не привязано"
+            }
         }
     }
 
@@ -314,6 +322,26 @@ ApplicationWindow {
             ListRow {
                 title: "Runtime pid"
                 subtitle: permissionClient.selectedAppInfo.runtime_pid ? permissionClient.selectedAppInfo.runtime_pid : "-"
+            }
+            ListRow {
+                title: "Window ID"
+                subtitle: permissionClient.selectedAppInfo.window_id ? permissionClient.selectedAppInfo.window_id : "-"
+            }
+            ListRow {
+                title: "Window title"
+                subtitle: permissionClient.selectedAppInfo.window_title ? permissionClient.selectedAppInfo.window_title : "-"
+            }
+            ListRow {
+                title: "Window visible"
+                subtitle: permissionClient.selectedAppInfo.window_visible ? permissionClient.selectedAppInfo.window_visible : "false"
+            }
+            ListRow {
+                title: "Window mapped"
+                subtitle: permissionClient.selectedAppInfo.window_mapped ? permissionClient.selectedAppInfo.window_mapped : "false"
+            }
+            ListRow {
+                title: "Window geometry"
+                subtitle: permissionClient.selectedAppInfo.window_geometry ? permissionClient.selectedAppInfo.window_geometry : "-"
             }
             ListRow {
                 title: "Last launch"
@@ -497,6 +525,15 @@ ApplicationWindow {
                                     + (modelData.pid ? " | pid=" + modelData.pid : "")
                                 color: Theme.textSecondary
                                 font.pixelSize: 12
+                            }
+
+                            Label {
+                                text: (modelData.window_title ? modelData.window_title : "окно не найдено")
+                                    + " | "
+                                    + (modelData.window_state ? modelData.window_state : "no_window")
+                                    + (modelData.window_id ? " | " + modelData.window_id : "")
+                                color: Theme.textMuted
+                                font.pixelSize: 11
                             }
                         }
 

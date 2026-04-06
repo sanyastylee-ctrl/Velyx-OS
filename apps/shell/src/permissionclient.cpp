@@ -7,6 +7,8 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QProcess>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QVariantList>
@@ -39,6 +41,33 @@ QString permissionDisplayName(const QString &permission)
         return "Захват экрана";
     }
     return permission;
+}
+
+QString runTool(const QString &program, const QStringList &arguments)
+{
+    QProcess process;
+    process.start(program, arguments);
+    if (!process.waitForStarted(400) || !process.waitForFinished(1500)) {
+        return {};
+    }
+    return QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+}
+
+bool runToolSucceeded(const QString &program, const QStringList &arguments)
+{
+    QProcess process;
+    process.start(program, arguments);
+    if (!process.waitForStarted(400) || !process.waitForFinished(1500)) {
+        return false;
+    }
+    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+QString extractWindowId(const QString &raw)
+{
+    static const QRegularExpression pattern("(0x[0-9a-fA-F]+)");
+    const QRegularExpressionMatch match = pattern.match(raw);
+    return match.hasMatch() ? match.captured(1) : QString();
 }
 }
 
@@ -75,6 +104,11 @@ QString PermissionClient::activeAppId() const
 QString PermissionClient::activeAppTitle() const
 {
     return m_activeAppTitle;
+}
+
+QString PermissionClient::activeWindowId() const
+{
+    return m_activeWindowId;
 }
 
 QString PermissionClient::launchStatus() const
@@ -197,19 +231,34 @@ void PermissionClient::refreshOpenApps()
         return;
     }
 
+    const QString systemActiveWindowId = querySystemActiveWindowId();
     QVariantList openApps;
     for (const QVariant &item : reply.arguments().constFirst().toList()) {
         QVariantMap runtime = item.toMap();
         const QString appId = runtime.value("app_id").toString();
         const QVariantMap info = fetchAppInfo(appId);
         const QVariantMap sessionApp = m_sessionApps.value(appId).toMap();
+        const QVariantMap window = discoverWindowForPid(runtime.value("pid").toString());
         runtime.insert("display_name", info.value("display_name", appId));
         runtime.insert("title", info.value("display_name", appId));
         runtime.insert("trust_level", info.value("trust_level"));
         runtime.insert("required", sessionApp.value("required", false));
         runtime.insert("autostart", sessionApp.value("autostart", false));
         runtime.insert("runtime_state", runtime.value("state"));
-        runtime.insert("window_state", runtime.value("state"));
+        runtime.insert("window_id", window.value("window_id"));
+        runtime.insert("window_title", window.value("window_title", info.value("display_name", appId)));
+        runtime.insert("window_geometry", window.value("geometry"));
+        runtime.insert("is_visible", window.value("is_visible", false));
+        runtime.insert("is_mapped", window.value("is_mapped", false));
+        runtime.insert("has_window", window.value("has_window", false));
+        runtime.insert(
+            "window_state",
+            window.value("has_window").toBool()
+                ? (window.value("is_visible").toBool() ? "visible" : "hidden")
+                : "no_window");
+        runtime.insert(
+            "window_active",
+            !systemActiveWindowId.isEmpty() && window.value("window_id").toString() == systemActiveWindowId);
         runtime.insert("closable", true);
         runtime.insert("active", appId == m_activeAppId);
         openApps.push_back(runtime);
@@ -350,6 +399,17 @@ void PermissionClient::selectActiveApp(const QString &appId)
 {
     updateActiveApp(appId, true);
     selectApp(appId);
+    for (const QVariant &entry : std::as_const(m_openApps)) {
+        const QVariantMap app = entry.toMap();
+        if (app.value("app_id").toString() == appId) {
+            const QString windowId = app.value("window_id").toString();
+            if (!windowId.isEmpty()) {
+                focusWindow(windowId);
+                logShellEvent("shell_window_focus_requested", appId, QString("window_id=%1").arg(windowId));
+            }
+            break;
+        }
+    }
 }
 
 void PermissionClient::refreshSelectedAppRuntime()
@@ -380,6 +440,13 @@ void PermissionClient::refreshSelectedAppRuntime()
     updated.insert("runtime_exited_at", runtime.value("exited_at"));
     updated.insert("runtime_exit_code", runtime.value("exit_code"));
     updated.insert("runtime_failure_reason", runtime.value("failure_reason"));
+    const QVariantMap window = discoverWindowForPid(runtime.value("pid").toString());
+    updated.insert("window_id", window.value("window_id"));
+    updated.insert("window_title", window.value("window_title"));
+    updated.insert("window_geometry", window.value("geometry"));
+    updated.insert("window_visible", window.value("is_visible", false));
+    updated.insert("window_mapped", window.value("is_mapped", false));
+    updated.insert("window_active", window.value("window_id").toString() == querySystemActiveWindowId());
     m_selectedAppInfo = updated;
     emit selectedAppInfoChanged();
     refreshOpenApps();
@@ -694,15 +761,18 @@ void PermissionClient::updateActiveApp(const QString &appId, bool userInitiated)
     }
     m_activeAppId = appId;
     m_activeAppTitle.clear();
+    m_activeWindowId.clear();
     for (const QVariant &entry : std::as_const(m_openApps)) {
         const QVariantMap app = entry.toMap();
         if (app.value("app_id").toString() == appId) {
             m_activeAppTitle = app.value("display_name", appId).toString();
+            m_activeWindowId = app.value("window_id").toString();
             break;
         }
     }
     if (m_activeAppTitle.isEmpty() && m_selectedAppInfo.value("app_id").toString() == appId) {
         m_activeAppTitle = m_selectedAppInfo.value("display_name", appId).toString();
+        m_activeWindowId = m_selectedAppInfo.value("window_id").toString();
     }
     for (int index = 0; index < m_openApps.size(); ++index) {
         QVariantMap app = m_openApps[index].toMap();
@@ -752,8 +822,12 @@ void PermissionClient::reconcileActiveApp()
                 app.insert("active", isActive);
                 if (isActive) {
                     m_activeAppTitle = app.value("display_name", nextActiveId).toString();
+                    m_activeWindowId = app.value("window_id").toString();
                 }
                 m_openApps[index] = app;
+            }
+            if (nextActiveId.isEmpty()) {
+                m_activeWindowId.clear();
             }
             emit openAppsChanged();
             emit activeAppChanged();
@@ -769,11 +843,91 @@ void PermissionClient::reconcileActiveApp()
         logShellEvent(
             "shell_window_state_updated",
             app.value("app_id").toString(),
-            QString("state=%1 pid=%2 active=%3")
+            QString("state=%1 pid=%2 active=%3 window_id=%4 visible=%5 mapped=%6")
                 .arg(app.value("state").toString(),
                      app.value("pid").toString(),
-                     app.value("active").toBool() ? "true" : "false"));
+                     app.value("active").toBool() ? "true" : "false",
+                     app.value("window_id").toString(),
+                     app.value("is_visible").toBool() ? "true" : "false",
+                     app.value("is_mapped").toBool() ? "true" : "false"));
     }
+}
+
+QVariantMap PermissionClient::discoverWindowForPid(const QString &pid) const
+{
+    if (pid.isEmpty()) {
+        return {};
+    }
+
+    const QString rootDump = runTool("xprop", {"-root", "_NET_CLIENT_LIST"});
+    if (rootDump.isEmpty()) {
+        return {};
+    }
+
+    const QStringList windowIds = rootDump.split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
+    for (const QString &token : windowIds) {
+        const QString windowId = extractWindowId(token);
+        if (windowId.isEmpty()) {
+            continue;
+        }
+
+        const QString pidDump = runTool("xprop", {"-id", windowId, "_NET_WM_PID"});
+        if (!pidDump.contains(pid)) {
+            continue;
+        }
+
+        QVariantMap window;
+        const QString titleDump = runTool("xprop", {"-id", windowId, "_NET_WM_NAME", "WM_NAME"});
+        const QString mapDump = runTool("xwininfo", {"-id", windowId});
+        const QString geometryDump = runTool("xwininfo", {"-id", windowId, "-stats"});
+        window.insert("window_id", windowId);
+        window.insert("has_window", true);
+        window.insert("window_title", titleDump.section('=', 1).trimmed().remove('"'));
+        window.insert("is_visible", mapDump.contains("Map State: IsViewable"));
+        window.insert("is_mapped", !mapDump.contains("Map State: IsUnMapped"));
+
+        QString geometry;
+        const QString width = geometryDump.contains("Width:")
+            ? geometryDump.section("Width:", 1).section('\n', 0, 0).trimmed()
+            : QString();
+        const QString height = geometryDump.contains("Height:")
+            ? geometryDump.section("Height:", 1).section('\n', 0, 0).trimmed()
+            : QString();
+        const QString absX = geometryDump.contains("Absolute upper-left X:")
+            ? geometryDump.section("Absolute upper-left X:", 1).section('\n', 0, 0).trimmed()
+            : QString();
+        const QString absY = geometryDump.contains("Absolute upper-left Y:")
+            ? geometryDump.section("Absolute upper-left Y:", 1).section('\n', 0, 0).trimmed()
+            : QString();
+        if (!width.isEmpty() && !height.isEmpty()) {
+            geometry = QString("%1x%2").arg(width, height);
+            if (!absX.isEmpty() && !absY.isEmpty()) {
+                geometry += QString(" @ %1,%2").arg(absX, absY);
+            }
+        }
+        window.insert("geometry", geometry);
+        return window;
+    }
+
+    return {};
+}
+
+QString PermissionClient::querySystemActiveWindowId() const
+{
+    return extractWindowId(runTool("xprop", {"-root", "_NET_ACTIVE_WINDOW"}));
+}
+
+bool PermissionClient::focusWindow(const QString &windowId) const
+{
+    if (windowId.isEmpty()) {
+        return false;
+    }
+
+    if (runToolSucceeded("wmctrl", {"-ia", windowId})) {
+        return true;
+    }
+
+    return runToolSucceeded("xdotool", {"windowactivate", windowId});
 }
 
 void PermissionClient::logShellEvent(const QString &action, const QString &appId, const QString &details)
