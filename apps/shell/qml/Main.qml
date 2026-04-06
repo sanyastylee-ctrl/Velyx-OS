@@ -7,11 +7,15 @@ import Velyx.UI
 ApplicationWindow {
     id: window
 
-    width: 1360
-    height: 880
+    width: 1480
+    height: 920
     visible: true
-    color: settingsClient.theme === "light" ? "#eef2f7" : Theme.windowBg
-    title: "Velyx Shell MVP"
+    color: "#0c1017"
+    title: "Velyx Shell"
+
+    property var appsInActiveSpace: permissionClient.apps.filter(function(app) { return app.in_active_space === true })
+    property var runningInActiveSpace: permissionClient.openApps.filter(function(app) { return app.in_active_space === true })
+    property var runningOutsideSpace: permissionClient.openApps.filter(function(app) { return app.in_active_space !== true })
 
     Component.onCompleted: {
         permissionClient.refreshRuntimeStatus()
@@ -135,668 +139,324 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: settingsClient.theme === "light" ? "#f6f8fb" : "#0d1016" }
-            GradientStop { position: 0.45; color: settingsClient.theme === "light" ? "#edf2f7" : "#111623" }
-            GradientStop { position: 1.0; color: settingsClient.theme === "light" ? "#dde7f2" : "#151b2a" }
+            GradientStop { position: 0.0; color: "#0b1016" }
+            GradientStop { position: 0.45; color: "#0f1520" }
+            GradientStop { position: 1.0; color: "#121926" }
         }
     }
 
     Rectangle {
-        anchors.top: parent.top
-        anchors.left: parent.left
-        anchors.right: parent.right
-        height: 52
-        color: "#101520"
-        border.color: Theme.strokeSubtle
-
-        RowLayout {
-            anchors.fill: parent
-            anchors.leftMargin: Theme.space5
-            anchors.rightMargin: Theme.space5
-
-            Label {
-                text: "Velyx OS"
-                color: Theme.textPrimary
-                font.family: Theme.fontDisplay
-                font.pixelSize: 20
-                font.weight: Font.DemiBold
-            }
-
-            Item { Layout.fillWidth: true }
-
-            Label {
-                text: "Пятница 10:42"
-                color: Theme.textSecondary
-                font.pixelSize: 13
-            }
-
-            Button {
-                text: "Центр управления"
-                onClicked: window.quickSettingsOpen = !window.quickSettingsOpen
-            }
-        }
-    }
-
-    SearchField {
-        anchors.top: parent.top
-        anchors.topMargin: 72
-        anchors.horizontalCenter: parent.horizontalCenter
-        width: 560
-        placeholderText: "Это MVP launcher shell: выберите приложение и проверьте permission flow"
-        readOnly: true
-    }
-
-    SectionHeader {
-        anchors.top: parent.top
-        anchors.topMargin: 140
-        anchors.left: parent.left
-        anchors.leftMargin: 72
-        title: "Velyx Shell MVP"
-        subtitle: "Минимальный графический клиент для launcher-service и permissions-service"
-    }
-
-    Card {
-        anchors.top: parent.top
-        anchors.topMargin: 184
-        anchors.left: parent.left
-        anchors.leftMargin: 72
-        anchors.right: parent.right
-        anchors.rightMargin: 72
-        height: 96
-
-        RowLayout {
-            anchors.fill: parent
-            spacing: Theme.space4
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Launcher"
-                subtitle: permissionClient.launcherAvailability
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Permissions"
-                subtitle: permissionClient.permissionsAvailability
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Session"
-                subtitle: permissionClient.sessionAvailability
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Session state"
-                subtitle: permissionClient.sessionState
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Session health"
-                subtitle: permissionClient.sessionHealth
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Active space"
-                subtitle: permissionClient.activeSpaceName.length > 0
-                    ? permissionClient.activeSpaceName + " (" + permissionClient.activeSpaceId + ")"
-                    : "Нет активного space"
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Space state"
-                subtitle: permissionClient.activeSpaceState.length > 0
-                    ? permissionClient.activeSpaceState
-                    : "unknown"
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Security mode"
-                subtitle: permissionClient.activeSpaceSecurityMode.length > 0
-                    ? permissionClient.activeSpaceSecurityMode
-                    : "-"
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Active app"
-                subtitle: permissionClient.activeAppTitle.length > 0
-                    ? permissionClient.activeAppTitle + " (" + permissionClient.activeAppId + ")"
-                    : "Нет активного приложения"
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Active window"
-                subtitle: permissionClient.activeWindowId.length > 0
-                    ? permissionClient.activeWindowId
-                    : "Окно не привязано"
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Active window title"
-                subtitle: permissionClient.activeWindowTitle.length > 0
-                    ? permissionClient.activeWindowTitle
-                    : "Нет активного реального окна"
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Active runtime"
-                subtitle: permissionClient.activeRuntimeState.length > 0
-                    ? permissionClient.activeRuntimeState
-                    : "inactive"
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Input mode"
-                subtitle: permissionClient.inputControlMode
-            }
-
-            ListRow {
-                Layout.fillWidth: true
-                title: "Shortcut"
-                subtitle: permissionClient.shortcutFeedback.length > 0
-                    ? permissionClient.shortcutFeedback
-                    : "Alt+Tab / Alt+Q / Alt+R / Alt+1..9"
-            }
-        }
-    }
-
-    Card {
-        anchors.top: parent.top
-        anchors.topMargin: 300
-        anchors.left: parent.left
-        anchors.leftMargin: 72
-        width: 360
-        height: 332
+        anchors.fill: parent
+        color: "transparent"
+        border.width: 0
 
         ColumnLayout {
             anchors.fill: parent
-            spacing: Theme.space4
+            anchors.margins: 22
+            spacing: 16
 
-            Label {
-                text: "Список приложений"
-                color: Theme.textSecondary
-                font.pixelSize: 12
-            }
-
-            RowLayout {
+            Rectangle {
                 Layout.fillWidth: true
-                spacing: Theme.space3
+                Layout.preferredHeight: 92
+                radius: 26
+                color: "#101722"
+                border.width: 1
+                border.color: Qt.rgba(1, 1, 1, 0.08)
 
-                Button {
-                    text: "Обновить"
-                    onClicked: permissionClient.refreshApps()
-                }
-            }
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.margins: 20
+                    spacing: 16
 
-            ListView {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                clip: true
-                spacing: Theme.space3
-                model: permissionClient.apps
-
-                delegate: Rectangle {
-                    required property var modelData
-                    width: ListView.view.width
-                    height: 78
-                    radius: 18
-                    color: permissionClient.selectedAppId === modelData.app_id ? Theme.surface3 : Theme.surface2
-                    border.width: 1
-                    border.color: Theme.strokeSubtle
-
-                    MouseArea {
-                        anchors.fill: parent
-                        onClicked: permissionClient.selectApp(parent.modelData.app_id)
-                    }
-
-                    Column {
-                        anchors.fill: parent
-                        anchors.margins: 16
-                        spacing: 6
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
 
                         Label {
-                            text: parent.parent.modelData.display_name.length > 0
-                                ? parent.parent.modelData.display_name
-                                : parent.parent.modelData.app_id
-                            color: Theme.textPrimary
-                            font.pixelSize: 16
+                            text: permissionClient.activeSpaceName.length > 0
+                                ? permissionClient.activeSpaceName
+                                : "Velyx OS"
+                            color: "#f6f8fc"
+                            font.pixelSize: 28
                             font.weight: Font.DemiBold
                         }
 
                         Label {
-                            text: parent.parent.modelData.app_id
-                            color: Theme.textSecondary
-                            font.pixelSize: 12
+                            text: permissionClient.recoveryNeeded
+                                ? "Recovery needed"
+                                : (permissionClient.sessionState === "ready"
+                                    ? "System ready"
+                                    : "System requires attention")
+                            color: permissionClient.recoveryNeeded ? "#ffb4b9" : "#9ba7bc"
+                            font.pixelSize: 13
                         }
+                    }
 
-                        Label {
-                            text: (parent.parent.modelData.session_required === "true" ? "[required] " : "[optional] ")
-                                + "trust=" + parent.parent.modelData.trust_level
-                            color: Theme.textMuted
-                            font.pixelSize: 11
-                        }
+                    StatusChip {
+                        compact: true
+                        label: "Session"
+                        value: permissionClient.sessionState
+                        tone: permissionClient.sessionState === "ready" ? "success"
+                            : (permissionClient.sessionState === "failed" ? "danger" : "warning")
+                    }
 
-                        Label {
-                            text: "state=" + (parent.parent.modelData.runtime_state ? parent.parent.modelData.runtime_state : "idle")
-                                + (parent.parent.modelData.runtime_pid ? " pid=" + parent.parent.modelData.runtime_pid : "")
-                            color: Theme.textMuted
-                            font.pixelSize: 11
-                        }
+                    StatusChip {
+                        compact: true
+                        label: "Security"
+                        value: permissionClient.activeSpaceSecurityMode.length > 0 ? permissionClient.activeSpaceSecurityMode : "-"
+                        tone: "accent"
+                    }
 
-                        Label {
-                            text: parent.parent.modelData.in_active_space === true
-                                ? "in active space"
-                                : "outside active space"
-                            color: parent.parent.modelData.in_active_space === true
-                                ? Theme.accentStrong
-                                : Theme.textMuted
-                            font.pixelSize: 11
-                        }
+                    StatusChip {
+                        compact: true
+                        label: "Update"
+                        value: permissionClient.updateState
+                        tone: permissionClient.recoveryNeeded ? "danger" : "neutral"
+                    }
+
+                    StatusChip {
+                        compact: true
+                        label: "Active app"
+                        value: permissionClient.activeAppTitle.length > 0 ? permissionClient.activeAppTitle : "none"
+                        tone: permissionClient.activeAppId.length > 0 ? "accent" : "neutral"
                     }
                 }
             }
-        }
-    }
-
-    Card {
-        anchors.top: parent.top
-        anchors.topMargin: 300
-        anchors.left: parent.left
-        anchors.leftMargin: 468
-        width: 380
-        height: 332
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: Theme.space3
-
-            SectionHeader {
-                title: "Информация о приложении"
-                subtitle: "GetAppInfo(app_id)"
-            }
-
-            ListRow {
-                title: "App ID"
-                subtitle: permissionClient.selectedAppInfo.app_id ? permissionClient.selectedAppInfo.app_id : "Не выбрано"
-            }
-            ListRow {
-                title: "Display name"
-                subtitle: permissionClient.selectedAppInfo.display_name ? permissionClient.selectedAppInfo.display_name : "Не выбрано"
-            }
-            ListRow {
-                title: "Trust level"
-                subtitle: permissionClient.selectedAppInfo.trust_level ? permissionClient.selectedAppInfo.trust_level : "-"
-            }
-            ListRow {
-                title: "Required"
-                subtitle: permissionClient.selectedAppInfo.session_required ? permissionClient.selectedAppInfo.session_required : "false"
-            }
-            ListRow {
-                title: "Autostart"
-                subtitle: permissionClient.selectedAppInfo.session_autostart ? permissionClient.selectedAppInfo.session_autostart : "false"
-            }
-            ListRow {
-                title: "In active space"
-                subtitle: permissionClient.selectedAppInfo.in_active_space ? permissionClient.selectedAppInfo.in_active_space : "false"
-            }
-            ListRow {
-                title: "Required permissions"
-                subtitle: permissionClient.selectedAppInfo.requested_permissions ? permissionClient.selectedAppInfo.requested_permissions : "-"
-            }
-            ListRow {
-                title: "Executable path"
-                subtitle: permissionClient.selectedAppInfo.executable_path ? permissionClient.selectedAppInfo.executable_path : "-"
-            }
-            ListRow {
-                title: "Manifest valid"
-                subtitle: permissionClient.selectedAppInfo.manifest_valid ? permissionClient.selectedAppInfo.manifest_valid : "-"
-            }
-            ListRow {
-                title: "Executable valid"
-                subtitle: permissionClient.selectedAppInfo.executable_valid ? permissionClient.selectedAppInfo.executable_valid : "-"
-            }
-            ListRow {
-                title: "Profile valid"
-                subtitle: permissionClient.selectedAppInfo.profile_valid ? permissionClient.selectedAppInfo.profile_valid : "-"
-            }
-            ListRow {
-                title: "Runtime state"
-                subtitle: permissionClient.selectedAppInfo.runtime_state ? permissionClient.selectedAppInfo.runtime_state : "idle"
-            }
-            ListRow {
-                title: "Runtime pid"
-                subtitle: permissionClient.selectedAppInfo.runtime_pid ? permissionClient.selectedAppInfo.runtime_pid : "-"
-            }
-            ListRow {
-                title: "Window ID"
-                subtitle: permissionClient.selectedAppInfo.window_id ? permissionClient.selectedAppInfo.window_id : "-"
-            }
-            ListRow {
-                title: "Window title"
-                subtitle: permissionClient.selectedAppInfo.window_title ? permissionClient.selectedAppInfo.window_title : "-"
-            }
-            ListRow {
-                title: "Window visible"
-                subtitle: permissionClient.selectedAppInfo.window_visible ? permissionClient.selectedAppInfo.window_visible : "false"
-            }
-            ListRow {
-                title: "Window mapped"
-                subtitle: permissionClient.selectedAppInfo.window_mapped ? permissionClient.selectedAppInfo.window_mapped : "false"
-            }
-            ListRow {
-                title: "Window geometry"
-                subtitle: permissionClient.selectedAppInfo.window_geometry ? permissionClient.selectedAppInfo.window_geometry : "-"
-            }
-            ListRow {
-                title: "Last launch"
-                subtitle: permissionClient.selectedAppInfo.last_launch_status ? permissionClient.selectedAppInfo.last_launch_status : "-"
-            }
-            ListRow {
-                title: "Last pid"
-                subtitle: permissionClient.selectedAppInfo.last_pid ? permissionClient.selectedAppInfo.last_pid : "-"
-            }
-            ListRow {
-                title: "Last exit code"
-                subtitle: permissionClient.selectedAppInfo.runtime_exit_code ? permissionClient.selectedAppInfo.runtime_exit_code : "-"
-            }
-            ListRow {
-                title: "Failure reason"
-                subtitle: permissionClient.selectedAppInfo.runtime_failure_reason ? permissionClient.selectedAppInfo.runtime_failure_reason : "-"
-            }
-            ListRow {
-                title: "Restart attempts"
-                subtitle: permissionClient.selectedAppInfo.session_retry_count ? permissionClient.selectedAppInfo.session_retry_count : "0"
-            }
-
-            Item { Layout.fillHeight: true }
 
             RowLayout {
                 Layout.fillWidth: true
-                spacing: Theme.space3
-
-                Button {
-                    Layout.fillWidth: true
-                    text: "Launch"
-                    enabled: permissionClient.selectedAppId.length > 0
-                    onClicked: permissionClient.launchSelectedApp()
-                }
-
-                Button {
-                    Layout.fillWidth: true
-                    text: "Stop"
-                    enabled: permissionClient.selectedAppId.length > 0
-                    onClicked: permissionClient.stopSelectedApp()
-                }
-
-                Button {
-                    Layout.fillWidth: true
-                    text: "Restart"
-                    enabled: permissionClient.selectedAppId.length > 0
-                    onClicked: permissionClient.restartSelectedApp()
-                }
-
-                Button {
-                    Layout.fillWidth: true
-                    text: "Reset permissions"
-                    enabled: permissionClient.selectedAppId.length > 0
-                    onClicked: permissionClient.resetPermissions(permissionClient.selectedAppId)
-                }
-            }
-        }
-    }
-
-    Card {
-        anchors.top: parent.top
-        anchors.topMargin: 300
-        anchors.right: parent.right
-        anchors.rightMargin: 72
-        width: 420
-        height: 332
-
-        ColumnLayout {
-            anchors.fill: parent
-            spacing: Theme.space3
-
-            SectionHeader {
-                title: "Статус и результат"
-                subtitle: "Последний backend action/result"
-            }
-
-            ListRow {
-                title: "Last action"
-                subtitle: permissionClient.lastAction.length > 0 ? permissionClient.lastAction : "-"
-            }
-            ListRow {
-                title: "Last result"
-                subtitle: permissionClient.lastResult.length > 0 ? permissionClient.lastResult : "-"
-            }
-            ListRow {
-                title: "Reason"
-                subtitle: permissionClient.lastReason.length > 0 ? permissionClient.lastReason : "-"
-            }
-            ListRow {
-                title: "Next action"
-                subtitle: permissionClient.nextAction.length > 0 ? permissionClient.nextAction : "-"
-            }
-
-            Card {
-                Layout.fillWidth: true
                 Layout.fillHeight: true
-                fillColor: Theme.surface2
+                spacing: 16
+
+                Rectangle {
+                    Layout.preferredWidth: 320
+                    Layout.fillHeight: true
+                    radius: 24
+                    color: "#101722"
+                    border.width: 1
+                    border.color: Qt.rgba(1, 1, 1, 0.08)
+
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 18
+                        spacing: 14
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 4
+
+                            Label {
+                                text: "Spaces"
+                                color: "#f3f6fb"
+                                font.pixelSize: 22
+                                font.weight: Font.DemiBold
+                            }
+
+                            Label {
+                                text: "Contexts drive the session. Choose the space, then work inside it."
+                                color: "#8f99ad"
+                                font.pixelSize: 12
+                                wrapMode: Text.WordWrap
+                            }
+                        }
+
+                        Button {
+                            text: "Refresh runtime"
+                            onClicked: {
+                                permissionClient.refreshRuntimeStatus()
+                                permissionClient.refreshSpaces()
+                                permissionClient.refreshOpenApps()
+                                permissionClient.refreshApps()
+                            }
+                        }
+
+                        ScrollView {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+
+                            Column {
+                                width: parent.width
+                                spacing: 10
+
+                                Repeater {
+                                    model: permissionClient.spaces
+
+                                    delegate: SpaceCard {
+                                        width: parent.width
+                                        space: modelData
+                                        onActivateRequested: permissionClient.activateSpace(spaceId)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
 
                 ColumnLayout {
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    spacing: 16
+
+                    SpaceOverviewPanel {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 190
+                        permissionClient: permissionClient
+                        inSpaceCount: window.appsInActiveSpace.length
+                        runningInSpaceCount: window.runningInActiveSpace.length
+                        outsideCount: window.runningOutsideSpace.length
+                    }
+
+                    SystemStatusPanel {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 154
+                        permissionClient: permissionClient
+                    }
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        radius: 24
+                        color: "#101722"
+                        border.width: 1
+                        border.color: Qt.rgba(1, 1, 1, 0.08)
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            anchors.margins: 18
+                            spacing: 12
+
+                            RowLayout {
+                                Layout.fillWidth: true
+
+                                ColumnLayout {
+                                    Layout.fillWidth: true
+                                    spacing: 4
+
+                                    Label {
+                                        text: "Apps in current space"
+                                        color: "#f3f6fb"
+                                        font.pixelSize: 20
+                                        font.weight: Font.DemiBold
+                                    }
+
+                                    Label {
+                                        text: "Primary app set for the active context."
+                                        color: "#8f99ad"
+                                        font.pixelSize: 12
+                                    }
+                                }
+                            }
+
+                            Label {
+                                visible: window.appsInActiveSpace.length === 0
+                                text: "No apps in this space"
+                                color: "#7f8aa0"
+                                font.pixelSize: 13
+                            }
+
+                            ScrollView {
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                clip: true
+                                visible: window.appsInActiveSpace.length > 0
+
+                                GridLayout {
+                                    width: parent.width
+                                    columns: width > 900 ? 2 : 1
+                                    columnSpacing: 12
+                                    rowSpacing: 12
+
+                                    Repeater {
+                                        model: window.appsInActiveSpace
+
+                                        delegate: AppCard {
+                                            Layout.fillWidth: true
+                                            Layout.minimumWidth: 300
+                                            app: modelData
+                                            selected: permissionClient.selectedAppId === modelData.app_id
+                                            onSelectRequested: permissionClient.selectApp(appId)
+                                            onLaunchRequested: {
+                                                permissionClient.selectApp(appId)
+                                                permissionClient.launchSelectedApp()
+                                            }
+                                            onStopRequested: permissionClient.closeOpenApp(appId)
+                                            onRestartRequested: permissionClient.restartOpenApp(appId)
+                                            onActivateRequested: permissionClient.selectActiveApp(appId)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 250
+                        spacing: 16
+
+                        OpenAppsPanel {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            title: "Open in this space"
+                            subtitle: "Running windows aligned with the current context"
+                            appsModel: window.runningInActiveSpace
+                            permissionClient: permissionClient
+                        }
+
+                        OpenAppsPanel {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            title: "Running outside current space"
+                            subtitle: "Visible, but secondary to the active context"
+                            appsModel: window.runningOutsideSpace
+                            permissionClient: permissionClient
+                        }
+                    }
+                }
+
+                DetailsPanel {
+                    Layout.preferredWidth: 360
+                    Layout.fillHeight: true
+                    permissionClient: permissionClient
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.preferredHeight: 54
+                radius: 18
+                color: "#101722"
+                border.width: 1
+                border.color: Qt.rgba(1, 1, 1, 0.08)
+
+                RowLayout {
                     anchors.fill: parent
-                    spacing: Theme.space3
+                    anchors.margins: 14
+                    spacing: 16
 
                     Label {
-                        text: "Last message"
-                        color: Theme.textMuted
+                        text: "Last action"
+                        color: "#8f99ad"
                         font.pixelSize: 12
                     }
 
                     Label {
                         Layout.fillWidth: true
-                        wrapMode: Text.WordWrap
-                        text: permissionClient.launchResultMessage.length > 0
-                            ? permissionClient.launchResultMessage
-                            : "Здесь появится результат launch/permission flow."
-                        color: permissionClient.launchStatus === "denied"
-                            ? Theme.danger
-                            : ((permissionClient.launchStatus === "manifest_invalid"
-                                || permissionClient.launchStatus === "executable_invalid"
-                                || permissionClient.launchStatus === "profile_invalid"
-                                || permissionClient.launchStatus === "sandbox_failed"
-                                || permissionClient.launchStatus === "security_failed"
-                                || permissionClient.launchStatus === "failed")
-                               ? Theme.warning
-                            : ((permissionClient.launchStatus === "allowed"
-                                || permissionClient.launchStatus === "already_running"
-                                || permissionClient.launchStatus === "launched")
-                               ? Theme.accentStrong
-                               : Theme.textPrimary))
-                        font.pixelSize: 14
-                    }
-                }
-            }
-        }
-    }
-
-    Card {
-        anchors.left: parent.left
-        anchors.leftMargin: 72
-        anchors.right: parent.right
-        anchors.rightMargin: 72
-        anchors.bottom: parent.bottom
-        anchors.bottomMargin: 48
-        height: 250
-
-        RowLayout {
-            anchors.fill: parent
-            spacing: Theme.space3
-
-            Card {
-                Layout.preferredWidth: 380
-                Layout.fillHeight: true
-                fillColor: Theme.surface2
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: Theme.space3
-
-                    SectionHeader {
-                        title: "Spaces"
-                        subtitle: "Контексты работы Velyx OS"
+                        text: permissionClient.lastAction.length > 0
+                            ? permissionClient.lastAction + " • " + permissionClient.lastResult + " • " + permissionClient.lastReason
+                            : "No recent action"
+                        color: "#e8edf7"
+                        font.pixelSize: 12
+                        elide: Text.ElideRight
                     }
 
-                    ListView {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        clip: true
-                        spacing: Theme.space3
-                        model: permissionClient.spaces
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            width: ListView.view.width
-                            height: 74
-                            radius: 16
-                            color: modelData.active === "true" ? Theme.surface3 : Theme.surface1
-                            border.width: 1
-                            border.color: modelData.active === "true" ? Theme.accentStrong : Theme.strokeSubtle
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 14
-                                spacing: Theme.space3
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 4
-
-                                    Label {
-                                        text: modelData.display_name ? modelData.display_name : modelData.space_id
-                                        color: Theme.textPrimary
-                                        font.pixelSize: 15
-                                        font.weight: Font.DemiBold
-                                    }
-
-                                    Label {
-                                        text: modelData.space_id + " | " + (modelData.source ? modelData.source : "user")
-                                            + " | " + (modelData.runtime_state ? modelData.runtime_state : "unknown")
-                                        color: Theme.textSecondary
-                                        font.pixelSize: 12
-                                    }
-
-                                    Label {
-                                        text: "security=" + (modelData.security_mode ? modelData.security_mode : "-")
-                                            + " | preferred="
-                                            + (modelData.preferred_active_app ? modelData.preferred_active_app : "-")
-                                        color: Theme.textMuted
-                                        font.pixelSize: 11
-                                    }
-                                }
-
-                                Button {
-                                    text: modelData.active === "true" ? "Active" : "Activate"
-                                    enabled: modelData.active !== "true"
-                                    onClicked: permissionClient.activateSpace(modelData.space_id)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Card {
-                Layout.fillWidth: true
-                Layout.fillHeight: true
-                fillColor: Theme.surface2
-
-                ColumnLayout {
-                    anchors.fill: parent
-                    spacing: Theme.space3
-
-                    SectionHeader {
-                        title: "Open Apps"
-                        subtitle: "Apps in active space vs outside current context"
-                    }
-
-                    ListView {
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        clip: true
-                        spacing: Theme.space3
-                        model: permissionClient.openApps
-
-                        delegate: Rectangle {
-                            required property var modelData
-                            width: ListView.view.width
-                            height: 68
-                            radius: 16
-                            color: modelData.active ? Theme.surface3 : Theme.surface2
-                            border.width: 1
-                            border.color: modelData.active ? Theme.accentStrong : Theme.strokeSubtle
-
-                            RowLayout {
-                                anchors.fill: parent
-                                anchors.margins: 14
-                                spacing: Theme.space3
-
-                                ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 4
-
-                                    Label {
-                                        text: modelData.display_name ? modelData.display_name : modelData.app_id
-                                        color: Theme.textPrimary
-                                        font.pixelSize: 15
-                                        font.weight: Font.DemiBold
-                                    }
-
-                                    Label {
-                                        text: modelData.app_id + " | state=" + modelData.state
-                                            + (modelData.pid ? " | pid=" + modelData.pid : "")
-                                            + (modelData.in_active_space === true ? " | in-space" : " | outside-space")
-                                        color: Theme.textSecondary
-                                        font.pixelSize: 12
-                                    }
-
-                                    Label {
-                                        text: (modelData.window_title ? modelData.window_title : "окно не найдено")
-                                            + " | "
-                                            + (modelData.window_state ? modelData.window_state : "no_window")
-                                            + (modelData.window_id ? " | " + modelData.window_id : "")
-                                        color: Theme.textMuted
-                                        font.pixelSize: 11
-                                    }
-                                }
-
-                                Button {
-                                    text: modelData.active ? "Active" : "Activate"
-                                    onClicked: permissionClient.selectActiveApp(modelData.app_id)
-                                }
-
-                                Button {
-                                    text: "Restart"
-                                    onClicked: permissionClient.restartOpenApp(modelData.app_id)
-                                }
-
-                                Button {
-                                    text: "Close"
-                                    onClicked: permissionClient.closeOpenApp(modelData.app_id)
-                                }
-                            }
-                        }
+                    Label {
+                        text: permissionClient.shortcutFeedback.length > 0
+                            ? permissionClient.shortcutFeedback
+                            : permissionClient.inputControlMode
+                        color: "#8f99ad"
+                        font.pixelSize: 12
                     }
                 }
             }

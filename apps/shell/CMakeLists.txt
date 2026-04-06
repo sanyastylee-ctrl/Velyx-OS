@@ -14,6 +14,13 @@ qt_add_qml_module(velyx-shell
     QML_FILES
         qml/Main.qml
         qml/PermissionDialog.qml
+        qml/StatusChip.qml
+        qml/SpaceCard.qml
+        qml/AppCard.qml
+        qml/SystemStatusPanel.qml
+        qml/SpaceOverviewPanel.qml
+        qml/OpenAppsPanel.qml
+        qml/DetailsPanel.qml
         ai/AIOverlay.qml
         ai/AICommandPalette.qml
         ai/AIResultCard.qml

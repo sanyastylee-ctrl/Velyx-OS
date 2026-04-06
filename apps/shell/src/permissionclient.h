@@ -33,6 +33,10 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString sessionAvailability READ sessionAvailability NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString sessionState READ sessionState NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString sessionHealth READ sessionHealth NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString currentVersion READ currentVersion NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString updateState READ updateState NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString lastUpdateResult READ lastUpdateResult NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(bool recoveryNeeded READ recoveryNeeded NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString activeSpaceId READ activeSpaceId NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceName READ activeSpaceName NOTIFY spacesChanged)
     Q_PROPERTY(QString activeSpaceState READ activeSpaceState NOTIFY spacesChanged)
@@ -90,6 +94,10 @@ public:
     QString sessionAvailability() const;
     QString sessionState() const;
     QString sessionHealth() const;
+    QString currentVersion() const;
+    QString updateState() const;
+    QString lastUpdateResult() const;
+    bool recoveryNeeded() const;
     QString activeSpaceId() const;
     QString activeSpaceName() const;
     QString activeSpaceState() const;
@@ -164,6 +172,10 @@ private:
     QString m_sessionAvailability {"unknown"};
     QString m_sessionState {"unknown"};
     QString m_sessionHealth {"unknown"};
+    QString m_currentVersion;
+    QString m_updateState {"unknown"};
+    QString m_lastUpdateResult;
+    bool m_recoveryNeeded {false};
     QString m_activeSpaceId;
     QString m_activeSpaceName;
     QString m_activeSpaceState {"unknown"};

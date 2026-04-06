@@ -5,6 +5,8 @@
 #include <QDBusMessage>
 #include <QDBusReply>
 #include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QDir>
 #include <QFile>
 #include <QProcess>
@@ -189,6 +191,26 @@ QString PermissionClient::sessionState() const
 QString PermissionClient::sessionHealth() const
 {
     return m_sessionHealth;
+}
+
+QString PermissionClient::currentVersion() const
+{
+    return m_currentVersion;
+}
+
+QString PermissionClient::updateState() const
+{
+    return m_updateState;
+}
+
+QString PermissionClient::lastUpdateResult() const
+{
+    return m_lastUpdateResult;
+}
+
+bool PermissionClient::recoveryNeeded() const
+{
+    return m_recoveryNeeded;
 }
 
 QString PermissionClient::activeSpaceId() const
@@ -455,6 +477,10 @@ void PermissionClient::refreshRuntimeStatus()
     QString activeSpaceSecurityMode;
     QString activeSpacePreferredApp;
     QStringList activeSpaceApps;
+    QString currentVersion;
+    QString updateState = "unknown";
+    QString lastUpdateResult;
+    bool recoveryNeeded = false;
     if (sessionManager.isValid()) {
         QDBusReply<QVariantMap> reply = sessionManager.call("GetSessionState");
         if (reply.isValid()) {
@@ -488,6 +514,19 @@ void PermissionClient::refreshRuntimeStatus()
         }
     }
 
+    const QString updateStatePath = QDir::home().filePath(".velyx/update_state.json");
+    QFile updateFile(updateStatePath);
+    if (updateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(updateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            currentVersion = object.value("current_version").toString();
+            updateState = object.value("update_state").toString(updateState);
+            lastUpdateResult = object.value("last_update_result").toString();
+            recoveryNeeded = object.value("recovery_needed").toBool(false);
+        }
+    }
+
     if (m_sessionState != sessionState) {
         m_sessionState = sessionState;
         changed = true;
@@ -498,6 +537,22 @@ void PermissionClient::refreshRuntimeStatus()
     }
     if (m_sessionApps != sessionApps) {
         m_sessionApps = sessionApps;
+        changed = true;
+    }
+    if (m_currentVersion != currentVersion) {
+        m_currentVersion = currentVersion;
+        changed = true;
+    }
+    if (m_updateState != updateState) {
+        m_updateState = updateState;
+        changed = true;
+    }
+    if (m_lastUpdateResult != lastUpdateResult) {
+        m_lastUpdateResult = lastUpdateResult;
+        changed = true;
+    }
+    if (m_recoveryNeeded != recoveryNeeded) {
+        m_recoveryNeeded = recoveryNeeded;
         changed = true;
     }
     if (m_activeSpaceId != activeSpaceId) {
