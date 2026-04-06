@@ -11,59 +11,88 @@ Rectangle {
 
     function stateTone() {
         if (space.runtime_state === "ready")
-            return "#2f9e6f"
+            return Theme.success
         if (space.runtime_state === "failed")
-            return "#cf5c61"
-        return "#d6a44a"
+            return Theme.danger
+        return Theme.warning
     }
 
-    radius: 18
-    color: space.active === "true" ? "#1b2433" : "#141a25"
+    function appCount() {
+        return space.apps && space.apps.length !== undefined ? space.apps.length : 0
+    }
+
+    radius: Theme.radiusLg
+    color: space.active === "true" ? Theme.shellSurfaceOverlay : Theme.shellSurfaceRaised
     border.width: 1
-    border.color: space.active === "true" ? "#5b8cff" : Qt.rgba(1, 1, 1, 0.08)
-    implicitHeight: 112
+    border.color: space.active === "true" ? Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.42) : Theme.shellStroke
+    implicitHeight: 136
+
+    Behavior on color {
+        ColorAnimation { duration: Theme.motionBase }
+    }
+
+    Behavior on border.color {
+        ColorAnimation { duration: Theme.motionBase }
+    }
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.margins: 1
+        width: 4
+        radius: 3
+        color: root.space.active === "true" ? Theme.accentCool : Qt.rgba(1, 1, 1, 0.05)
+    }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: 8
+        anchors.margins: Theme.space4
+        spacing: Theme.space3
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: Theme.space3
 
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 2
+                spacing: 3
 
                 Label {
                     text: root.space.display_name || root.space.space_id
-                    color: "#f3f6fb"
-                    font.pixelSize: 16
+                    color: Theme.textPrimary
+                    font.family: Theme.fontDisplay
+                    font.pixelSize: 18
                     font.weight: Font.DemiBold
+                    elide: Text.ElideRight
                 }
 
                 Label {
                     text: root.space.description && root.space.description.length > 0
                         ? root.space.description
                         : root.space.space_id
-                    color: "#8f99ad"
+                    color: Theme.textSecondary
+                    font.family: Theme.fontSans
                     font.pixelSize: 12
                     wrapMode: Text.WordWrap
+                    maximumLineCount: 2
+                    elide: Text.ElideRight
                 }
             }
 
             Rectangle {
-                radius: 10
-                color: Qt.rgba(1, 1, 1, 0.06)
+                radius: Theme.radiusSm
+                color: Qt.rgba(1, 1, 1, 0.05)
                 border.width: 1
-                border.color: Qt.rgba(1, 1, 1, 0.08)
-                implicitWidth: 74
-                implicitHeight: 28
+                border.color: Theme.shellStroke
+                implicitWidth: 78
+                implicitHeight: 30
 
                 Label {
                     anchors.centerIn: parent
                     text: root.space.source || "user"
-                    color: "#c7d0df"
+                    color: Theme.textSecondary
+                    font.family: Theme.fontSans
                     font.pixelSize: 11
                     font.weight: Font.DemiBold
                 }
@@ -75,10 +104,12 @@ Rectangle {
             spacing: 8
 
             Rectangle {
-                radius: 10
-                color: Qt.rgba(1, 1, 1, 0.05)
-                implicitHeight: 26
-                implicitWidth: 92
+                radius: Theme.radiusSm
+                color: Qt.rgba(root.stateTone().r, root.stateTone().g, root.stateTone().b, 0.14)
+                border.width: 1
+                border.color: Qt.rgba(root.stateTone().r, root.stateTone().g, root.stateTone().b, 0.22)
+                implicitHeight: 28
+                implicitWidth: 98
 
                 RowLayout {
                     anchors.fill: parent
@@ -94,22 +125,41 @@ Rectangle {
 
                     Label {
                         text: root.space.runtime_state || "unknown"
-                        color: "#e8edf7"
+                        color: Theme.textPrimary
                         font.pixelSize: 11
+                        font.weight: Font.DemiBold
                     }
+                }
+            }
+
+            Rectangle {
+                radius: Theme.radiusSm
+                color: Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.1)
+                border.width: 1
+                border.color: Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.16)
+                implicitHeight: 28
+                implicitWidth: 86
+
+                Label {
+                    anchors.centerIn: parent
+                    text: root.appCount() + " apps"
+                    color: Theme.textSecondary
+                    font.pixelSize: 11
                 }
             }
 
             Label {
                 Layout.fillWidth: true
-                text: "Security: " + (root.space.security_mode || "-")
-                color: "#8f99ad"
+                text: root.space.active === "true"
+                    ? "Current context"
+                    : ("Mode: " + (root.space.security_mode || "standard"))
+                color: root.space.active === "true" ? Theme.accentCoolStrong : Theme.textMuted
                 font.pixelSize: 11
                 elide: Text.ElideRight
             }
 
             Button {
-                text: root.space.active === "true" ? "Active" : "Activate"
+                text: root.space.active === "true" ? "Current" : "Enter"
                 enabled: root.space.active !== "true"
                 onClicked: root.activateRequested(root.space.space_id)
             }

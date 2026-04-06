@@ -18,19 +18,35 @@ Rectangle {
     function stateTone() {
         const state = app.runtime_state || app.state || "idle"
         if (state === "running")
-            return "#2f9e6f"
+            return Theme.success
         if (state === "failed" || state === "broken")
-            return "#cf5c61"
+            return Theme.danger
         if (state === "starting" || state === "degraded")
-            return "#d6a44a"
-        return "#6b7280"
+            return Theme.warning
+        return Theme.info
     }
 
-    radius: 18
-    color: selected ? "#1c2434" : "#141a25"
+    function roleLabel() {
+        return root.app.in_active_space === true ? "Serving this space" : "Outside current space"
+    }
+
+    function stateLabel() {
+        return root.app.runtime_state || root.app.state || "idle"
+    }
+
+    radius: Theme.radiusLg
+    color: selected ? Theme.shellSurfaceOverlay : Theme.shellSurfaceRaised
     border.width: 1
-    border.color: selected ? "#5b8cff" : Qt.rgba(1, 1, 1, 0.08)
-    implicitHeight: compact ? 116 : 132
+    border.color: selected ? Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.36) : Theme.shellStroke
+    implicitHeight: compact ? 138 : 164
+
+    Behavior on color {
+        ColorAnimation { duration: Theme.motionBase }
+    }
+
+    Behavior on border.color {
+        ColorAnimation { duration: Theme.motionBase }
+    }
 
     MouseArea {
         anchors.fill: parent
@@ -39,11 +55,12 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 16
-        spacing: 8
+        anchors.margins: Theme.space4
+        spacing: compact ? Theme.space2 : Theme.space3
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: Theme.space3
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -51,25 +68,30 @@ Rectangle {
 
                 Label {
                     text: root.app.display_name || root.app.app_id
-                    color: "#f3f6fb"
-                    font.pixelSize: compact ? 15 : 16
+                    color: Theme.textPrimary
+                    font.family: Theme.fontSans
+                    font.pixelSize: compact ? 16 : 17
                     font.weight: Font.DemiBold
                     elide: Text.ElideRight
                 }
 
                 Label {
-                    text: root.app.app_id
-                    color: "#8f99ad"
-                    font.pixelSize: 12
+                    text: root.compact
+                        ? root.roleLabel()
+                        : (root.app.app_id + "  •  " + root.roleLabel())
+                    color: root.app.in_active_space === true ? Theme.accentCoolStrong : Theme.textMuted
+                    font.pixelSize: 11
                     elide: Text.ElideRight
                 }
             }
 
             Rectangle {
-                radius: 10
-                color: Qt.rgba(1, 1, 1, 0.05)
-                implicitWidth: 70
-                implicitHeight: 28
+                radius: Theme.radiusSm
+                color: Qt.rgba(root.stateTone().r, root.stateTone().g, root.stateTone().b, 0.14)
+                border.width: 1
+                border.color: Qt.rgba(root.stateTone().r, root.stateTone().g, root.stateTone().b, 0.2)
+                implicitWidth: 90
+                implicitHeight: 30
 
                 RowLayout {
                     anchors.fill: parent
@@ -84,9 +106,10 @@ Rectangle {
                     }
 
                     Label {
-                        text: root.app.runtime_state || root.app.state || "idle"
-                        color: "#e8edf7"
+                        text: root.stateLabel()
+                        color: Theme.textPrimary
                         font.pixelSize: 11
+                        font.weight: Font.DemiBold
                     }
                 }
             }
@@ -95,9 +118,9 @@ Rectangle {
         Label {
             Layout.fillWidth: true
             text: "Trust " + (root.app.trust_level || "-")
-                + " • " + (root.app.in_active_space === true ? "In space" : "Outside space")
-                + (root.app.version ? " • v" + root.app.version : "")
-            color: "#a4afc3"
+                + "  •  " + (root.app.source || "system")
+                + (root.app.version ? "  •  v" + root.app.version : "")
+            color: Theme.textSecondary
             font.pixelSize: 11
             elide: Text.ElideRight
         }
@@ -108,11 +131,11 @@ Rectangle {
                 ? root.app.window_title
                 : ((root.app.window_state && root.app.window_state !== "no_window")
                     ? root.app.window_state
-                    : "No real window")
-            color: "#7f8aa0"
+                    : "No real window yet")
+            color: (root.app.window_title || "").length > 0 ? Theme.textSecondary : Theme.textMuted
             font.pixelSize: 11
             elide: Text.ElideRight
-            visible: compact || (root.app.window_title || "").length > 0 || (root.app.window_state || "").length > 0
+            visible: true
         }
 
         Item { Layout.fillHeight: true }
@@ -122,9 +145,13 @@ Rectangle {
             spacing: 8
 
             Button {
-                text: "Launch"
-                enabled: (root.app.runtime_state || root.app.state || "idle") !== "running"
-                onClicked: root.launchRequested(root.app.app_id)
+                text: (root.app.runtime_state || root.app.state || "idle") === "running" ? "Focus" : "Launch"
+                onClicked: {
+                    if ((root.app.runtime_state || root.app.state || "idle") === "running")
+                        root.activateRequested(root.app.app_id)
+                    else
+                        root.launchRequested(root.app.app_id)
+                }
             }
 
             Button {
@@ -136,12 +163,6 @@ Rectangle {
             Button {
                 text: "Restart"
                 onClicked: root.restartRequested(root.app.app_id)
-            }
-
-            Button {
-                text: "Active"
-                enabled: (root.app.runtime_state || root.app.state || "idle") === "running"
-                onClicked: root.activateRequested(root.app.app_id)
             }
         }
     }

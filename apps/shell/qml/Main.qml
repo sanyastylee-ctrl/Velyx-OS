@@ -7,15 +7,38 @@ import Velyx.UI
 ApplicationWindow {
     id: window
 
-    width: 1480
-    height: 920
+    width: 1520
+    height: 940
     visible: true
-    color: "#0c1017"
+    color: Theme.shellBg
     title: "Velyx Shell"
 
     property var appsInActiveSpace: permissionClient.apps.filter(function(app) { return app.in_active_space === true })
     property var runningInActiveSpace: permissionClient.openApps.filter(function(app) { return app.in_active_space === true })
     property var runningOutsideSpace: permissionClient.openApps.filter(function(app) { return app.in_active_space !== true })
+    property var suggestedIntents: {
+        var matching = []
+        var others = []
+        for (var i = 0; i < permissionClient.intents.length; ++i) {
+            var intent = permissionClient.intents[i]
+            if (intent.status === "disabled")
+                continue
+            if (permissionClient.activeSpaceId.length > 0 && intent.target_space === permissionClient.activeSpaceId)
+                matching.push(intent)
+            else
+                others.push(intent)
+        }
+        return matching.concat(others).slice(0, 4)
+    }
+    property string systemConfidence: {
+        if (permissionClient.recoveryNeeded)
+            return "Recovery required"
+        if (permissionClient.sessionState === "ready" && permissionClient.sessionHealth === "ready")
+            return "Ready"
+        if (permissionClient.sessionState === "failed" || permissionClient.sessionHealth === "failed" || permissionClient.updateState === "failed")
+            return "Needs attention"
+        return "Degraded"
+    }
 
     Component.onCompleted: {
         permissionClient.refreshRuntimeStatus()
@@ -145,71 +168,79 @@ ApplicationWindow {
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
-            GradientStop { position: 0.0; color: "#0b1016" }
-            GradientStop { position: 0.45; color: "#0f1520" }
-            GradientStop { position: 1.0; color: "#121926" }
+            GradientStop { position: 0.0; color: Theme.shellBg }
+            GradientStop { position: 0.44; color: Theme.shellBgAlt }
+            GradientStop { position: 1.0; color: Theme.windowBg }
         }
     }
 
     Rectangle {
         anchors.fill: parent
         color: "transparent"
-        border.width: 0
 
         ColumnLayout {
             anchors.fill: parent
-            anchors.margins: 22
-            spacing: 16
+            anchors.margins: Theme.space6
+            spacing: Theme.space4
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 92
-                radius: 26
-                color: "#101722"
+                Layout.preferredHeight: 108
+                radius: Theme.radiusXl
+                color: Theme.shellSurfaceGlass
                 border.width: 1
-                border.color: Qt.rgba(1, 1, 1, 0.08)
+                border.color: Theme.shellStrokeStrong
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.margins: 20
-                    spacing: 16
+                    anchors.margins: Theme.space5
+                    spacing: Theme.space5
 
                     ColumnLayout {
                         Layout.fillWidth: true
                         spacing: 4
 
                         Label {
+                            text: "VELYX"
+                            color: Theme.accentCoolStrong
+                            font.family: Theme.fontSans
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                            letterSpacing: 2
+                        }
+
+                        Label {
                             text: permissionClient.activeSpaceName.length > 0
                                 ? permissionClient.activeSpaceName
-                                : "Velyx OS"
-                            color: "#f6f8fc"
-                            font.pixelSize: 28
+                                : "Context-driven operating environment"
+                            color: Theme.textPrimary
+                            font.family: Theme.fontDisplay
+                            font.pixelSize: 30
                             font.weight: Font.DemiBold
                         }
 
                         Label {
-                            text: permissionClient.recoveryNeeded
-                                ? "Recovery needed"
-                                : (permissionClient.sessionState === "ready"
-                                    ? "System ready"
-                                    : "System requires attention")
-                            color: permissionClient.recoveryNeeded ? "#ffb4b9" : "#9ba7bc"
+                            text: window.systemConfidence + "  •  " +
+                                (permissionClient.activeAppTitle.length > 0
+                                    ? "Active app: " + permissionClient.activeAppTitle
+                                    : "Choose a space and move into work")
+                            color: Theme.textSecondary
                             font.pixelSize: 13
                         }
                     }
 
                     StatusChip {
                         compact: true
-                        label: "Session"
-                        value: permissionClient.sessionState
-                        tone: permissionClient.sessionState === "ready" ? "success"
-                            : (permissionClient.sessionState === "failed" ? "danger" : "warning")
+                        label: "Confidence"
+                        value: window.systemConfidence
+                        tone: window.systemConfidence === "Ready" ? "success"
+                            : (window.systemConfidence === "Recovery required" ? "danger" : "warning")
                     }
 
                     StatusChip {
                         compact: true
-                        label: "Security"
-                        value: permissionClient.activeSpaceSecurityMode.length > 0 ? permissionClient.activeSpaceSecurityMode : "-"
+                        label: "Mode"
+                        value: permissionClient.activeSpaceSecurityMode.length > 0 ? permissionClient.activeSpaceSecurityMode : "standard"
                         tone: "accent"
                     }
 
@@ -222,9 +253,9 @@ ApplicationWindow {
 
                     StatusChip {
                         compact: true
-                        label: "Active app"
-                        value: permissionClient.activeAppTitle.length > 0 ? permissionClient.activeAppTitle : "none"
-                        tone: permissionClient.activeAppId.length > 0 ? "accent" : "neutral"
+                        label: "Runtime"
+                        value: permissionClient.currentVersion.length > 0 ? permissionClient.currentVersion : "unknown"
+                        tone: "accent"
                     }
                 }
             }
@@ -232,42 +263,29 @@ ApplicationWindow {
             RowLayout {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
-                spacing: 16
+                spacing: Theme.space4
 
                 Rectangle {
-                    Layout.preferredWidth: 320
+                    Layout.preferredWidth: 300
                     Layout.fillHeight: true
-                    radius: 24
-                    color: "#101722"
+                    radius: Theme.radiusXl
+                    color: Theme.shellSurface
                     border.width: 1
-                    border.color: Qt.rgba(1, 1, 1, 0.08)
+                    border.color: Theme.shellStroke
 
                     ColumnLayout {
                         anchors.fill: parent
-                        anchors.margins: 18
-                        spacing: 14
+                        anchors.margins: Theme.space5
+                        spacing: Theme.space4
 
-                        ColumnLayout {
+                        SectionHeader {
                             Layout.fillWidth: true
-                            spacing: 4
-
-                            Label {
-                                text: "Spaces"
-                                color: "#f3f6fb"
-                                font.pixelSize: 22
-                                font.weight: Font.DemiBold
-                            }
-
-                            Label {
-                                text: "Contexts drive the session. Choose the space, then work inside it."
-                                color: "#8f99ad"
-                                font.pixelSize: 12
-                                wrapMode: Text.WordWrap
-                            }
+                            title: "Contexts"
+                            subtitle: "Choose the space first. The rest of Velyx follows that context."
                         }
 
                         Button {
-                            text: "Refresh runtime"
+                            text: "Refresh workspace"
                             onClicked: {
                                 permissionClient.refreshRuntimeStatus()
                                 permissionClient.refreshSpaces()
@@ -279,158 +297,6 @@ ApplicationWindow {
                             }
                         }
 
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: 18
-                            color: "#141c29"
-                            border.width: 1
-                            border.color: Qt.rgba(1, 1, 1, 0.08)
-                            implicitHeight: 150
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 14
-                                spacing: 10
-
-                                Label {
-                                    text: "Intents"
-                                    color: "#f3f6fb"
-                                    font.pixelSize: 16
-                                    font.weight: Font.DemiBold
-                                }
-
-                                Label {
-                                    text: permissionClient.lastIntentId.length > 0
-                                        ? "Last: " + permissionClient.lastIntentId + " • " + permissionClient.lastIntentResult
-                                        : "Run a higher-level action to switch context."
-                                    color: "#8f99ad"
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
-
-                                ScrollView {
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    clip: true
-
-                                    Column {
-                                        width: parent.width
-                                        spacing: 10
-
-                                        Repeater {
-                                            model: permissionClient.intents
-
-                                            delegate: IntentCard {
-                                                width: parent.width
-                                                intent: modelData
-                                                lastIntentId: permissionClient.lastIntentId
-                                                lastIntentResult: permissionClient.lastIntentResult
-                                                onRunRequested: permissionClient.runIntent(intentId)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        Rectangle {
-                            Layout.fillWidth: true
-                            radius: 18
-                            color: "#141c29"
-                            border.width: 1
-                            border.color: Qt.rgba(1, 1, 1, 0.08)
-                            implicitHeight: 170
-
-                            ColumnLayout {
-                                anchors.fill: parent
-                                anchors.margins: 14
-                                spacing: 10
-
-                                Label {
-                                    text: "Automation"
-                                    color: "#f3f6fb"
-                                    font.pixelSize: 16
-                                    font.weight: Font.DemiBold
-                                }
-
-                                Label {
-                                    text: permissionClient.lastRuleId.length > 0
-                                        ? "Last: " + permissionClient.lastRuleId + " • " + permissionClient.lastRuleResult
-                                        : "Rules react to system transitions and keep the runtime aligned."
-                                    color: "#8f99ad"
-                                    font.pixelSize: 11
-                                    wrapMode: Text.WordWrap
-                                }
-
-                                Label {
-                                    text: "Enabled rules: " + permissionClient.rules.filter(function(rule) { return rule.enabled === true }).length
-                                    color: "#a4afc3"
-                                    font.pixelSize: 11
-                                }
-
-                                ScrollView {
-                                    Layout.fillWidth: true
-                                    Layout.fillHeight: true
-                                    clip: true
-
-                                    Column {
-                                        width: parent.width
-                                        spacing: 8
-
-                                        Repeater {
-                                            model: permissionClient.rules
-
-                                            delegate: Rectangle {
-                                                width: parent.width
-                                                radius: 14
-                                                color: modelData.rule_id === permissionClient.lastRuleId ? "#1b2433" : "#151d2a"
-                                                border.width: 1
-                                                border.color: modelData.rule_id === permissionClient.lastRuleId ? "#5b8cff" : Qt.rgba(1, 1, 1, 0.08)
-                                                implicitHeight: 74
-
-                                                RowLayout {
-                                                    anchors.fill: parent
-                                                    anchors.margins: 12
-                                                    spacing: 10
-
-                                                    ColumnLayout {
-                                                        Layout.fillWidth: true
-                                                        spacing: 2
-
-                                                        Label {
-                                                            text: modelData.display_name || modelData.rule_id
-                                                            color: "#f3f6fb"
-                                                            font.pixelSize: 13
-                                                            font.weight: Font.DemiBold
-                                                            elide: Text.ElideRight
-                                                        }
-
-                                                        Label {
-                                                            text: (modelData.trigger_type || "-") + " -> " + (modelData.action_type || "-")
-                                                            color: "#8f99ad"
-                                                            font.pixelSize: 11
-                                                            elide: Text.ElideRight
-                                                        }
-                                                    }
-
-                                                    Button {
-                                                        text: "Run"
-                                                        enabled: modelData.enabled === true
-                                                        onClicked: permissionClient.runRule(modelData.rule_id)
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        AgentPanel {
-                            Layout.fillWidth: true
-                            permissionClient: permissionClient
-                        }
-
                         ScrollView {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
@@ -438,7 +304,7 @@ ApplicationWindow {
 
                             Column {
                                 width: parent.width
-                                spacing: 10
+                                spacing: Theme.space3
 
                                 Repeater {
                                     model: permissionClient.spaces
@@ -457,63 +323,85 @@ ApplicationWindow {
                 ColumnLayout {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
-                    spacing: 16
+                    spacing: Theme.space4
 
                     SpaceOverviewPanel {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 190
+                        Layout.preferredHeight: 252
                         permissionClient: permissionClient
                         inSpaceCount: window.appsInActiveSpace.length
                         runningInSpaceCount: window.runningInActiveSpace.length
                         outsideCount: window.runningOutsideSpace.length
                     }
 
-                    SystemStatusPanel {
+                    RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 154
-                        permissionClient: permissionClient
+                        Layout.preferredHeight: 282
+                        spacing: Theme.space4
+
+                        SuggestedActionsPanel {
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            permissionClient: permissionClient
+                            intentsModel: window.suggestedIntents
+                        }
+
+                        SystemStatusPanel {
+                            Layout.preferredWidth: 390
+                            Layout.fillHeight: true
+                            permissionClient: permissionClient
+                        }
                     }
 
                     Rectangle {
                         Layout.fillWidth: true
                         Layout.fillHeight: true
-                        radius: 24
-                        color: "#101722"
+                        radius: Theme.radiusXl
+                        color: Theme.shellSurface
                         border.width: 1
-                        border.color: Qt.rgba(1, 1, 1, 0.08)
+                        border.color: Theme.shellStroke
 
                         ColumnLayout {
                             anchors.fill: parent
-                            anchors.margins: 18
-                            spacing: 12
+                            anchors.margins: Theme.space5
+                            spacing: Theme.space4
 
-                            RowLayout {
+                            SectionHeader {
                                 Layout.fillWidth: true
+                                title: "Apps serving this space"
+                                subtitle: "Primary tools for the active context. Operational details stay secondary."
+                            }
+
+                            Rectangle {
+                                Layout.fillWidth: true
+                                visible: window.appsInActiveSpace.length === 0
+                                radius: Theme.radiusMd
+                                color: Qt.rgba(1, 1, 1, 0.03)
+                                border.width: 1
+                                border.color: Theme.shellStroke
+                                implicitHeight: 96
 
                                 ColumnLayout {
-                                    Layout.fillWidth: true
-                                    spacing: 4
+                                    anchors.fill: parent
+                                    anchors.margins: Theme.space4
+                                    spacing: 6
 
                                     Label {
-                                        text: "Apps in current space"
-                                        color: "#f3f6fb"
-                                        font.pixelSize: 20
+                                        text: "No apps in this space"
+                                        color: Theme.textPrimary
+                                        font.pixelSize: 14
                                         font.weight: Font.DemiBold
                                     }
 
                                     Label {
-                                        text: "Primary app set for the active context."
-                                        color: "#8f99ad"
+                                        text: permissionClient.recoveryNeeded
+                                            ? "Recovery is currently the highest-priority action."
+                                            : "Run a suggested action or install apps that belong to this context."
+                                        color: Theme.textMuted
                                         font.pixelSize: 12
+                                        wrapMode: Text.WordWrap
                                     }
                                 }
-                            }
-
-                            Label {
-                                visible: window.appsInActiveSpace.length === 0
-                                text: "No apps in this space"
-                                color: "#7f8aa0"
-                                font.pixelSize: 13
                             }
 
                             ScrollView {
@@ -524,16 +412,16 @@ ApplicationWindow {
 
                                 GridLayout {
                                     width: parent.width
-                                    columns: width > 900 ? 2 : 1
-                                    columnSpacing: 12
-                                    rowSpacing: 12
+                                    columns: width > 920 ? 2 : 1
+                                    columnSpacing: Theme.space3
+                                    rowSpacing: Theme.space3
 
                                     Repeater {
                                         model: window.appsInActiveSpace
 
                                         delegate: AppCard {
                                             Layout.fillWidth: true
-                                            Layout.minimumWidth: 300
+                                            Layout.minimumWidth: 320
                                             app: modelData
                                             selected: permissionClient.selectedAppId === modelData.app_id
                                             onSelectRequested: permissionClient.selectApp(appId)
@@ -553,14 +441,14 @@ ApplicationWindow {
 
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 250
-                        spacing: 16
+                        Layout.preferredHeight: 270
+                        spacing: Theme.space4
 
                         OpenAppsPanel {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            title: "Open in this space"
-                            subtitle: "Running windows aligned with the current context"
+                            title: "Running in this space"
+                            subtitle: "Live windows aligned with the current context."
                             appsModel: window.runningInActiveSpace
                             permissionClient: permissionClient
                         }
@@ -568,46 +456,62 @@ ApplicationWindow {
                         OpenAppsPanel {
                             Layout.fillWidth: true
                             Layout.fillHeight: true
-                            title: "Running outside current space"
-                            subtitle: "Visible, but secondary to the active context"
+                            title: "Outside current space"
+                            subtitle: "Still visible, but not central to the active mode."
                             appsModel: window.runningOutsideSpace
                             permissionClient: permissionClient
                         }
                     }
                 }
 
-                DetailsPanel {
-                    Layout.preferredWidth: 360
+                ColumnLayout {
+                    Layout.preferredWidth: 390
                     Layout.fillHeight: true
-                    permissionClient: permissionClient
+                    spacing: Theme.space4
+
+                    AgentPanel {
+                        Layout.fillWidth: true
+                        permissionClient: permissionClient
+                    }
+
+                    DetailsPanel {
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        permissionClient: permissionClient
+                    }
+
+                    AutomationPanel {
+                        Layout.fillWidth: true
+                        permissionClient: permissionClient
+                    }
                 }
             }
 
             Rectangle {
                 Layout.fillWidth: true
-                Layout.preferredHeight: 54
-                radius: 18
-                color: "#101722"
+                Layout.preferredHeight: 58
+                radius: Theme.radiusLg
+                color: Theme.shellSurfaceGlass
                 border.width: 1
-                border.color: Qt.rgba(1, 1, 1, 0.08)
+                border.color: Theme.shellStroke
 
                 RowLayout {
                     anchors.fill: parent
-                    anchors.margins: 14
-                    spacing: 16
+                    anchors.margins: Theme.space4
+                    spacing: Theme.space4
 
                     Label {
                         text: "Last action"
-                        color: "#8f99ad"
+                        color: Theme.textMuted
                         font.pixelSize: 12
                     }
 
                     Label {
                         Layout.fillWidth: true
                         text: permissionClient.lastAction.length > 0
-                            ? permissionClient.lastAction + " • " + permissionClient.lastResult + " • " + permissionClient.lastReason
-                            : "No recent action"
-                        color: "#e8edf7"
+                            ? permissionClient.lastAction + "  •  " + permissionClient.lastResult + "  •  " + permissionClient.lastReason
+                            : "The system is waiting for the next action."
+                        color: Theme.textPrimary
                         font.pixelSize: 12
                         elide: Text.ElideRight
                     }
@@ -616,7 +520,7 @@ ApplicationWindow {
                         text: permissionClient.shortcutFeedback.length > 0
                             ? permissionClient.shortcutFeedback
                             : permissionClient.inputControlMode
-                        color: "#8f99ad"
+                        color: Theme.textMuted
                         font.pixelSize: 12
                     }
                 }

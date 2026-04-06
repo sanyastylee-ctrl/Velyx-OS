@@ -1,44 +1,51 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Velyx.DesignSystem
 
 Rectangle {
     id: root
 
     required property var permissionClient
-    radius: 18
-    color: "#141c29"
+    radius: Theme.radiusLg
+    color: Theme.shellSurfaceRaised
     border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.08)
-    implicitHeight: 220
+    border.color: Theme.shellStroke
+    implicitHeight: 250
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 14
-        spacing: 10
+        anchors.margins: Theme.space4
+        spacing: Theme.space3
 
-        Label {
-            text: "Operator"
-            color: "#f3f6fb"
-            font.pixelSize: 16
-            font.weight: Font.DemiBold
-        }
+        ColumnLayout {
+            Layout.fillWidth: true
+            spacing: 4
 
-        Label {
-            text: root.permissionClient.lastAgentAction.length > 0
-                ? "Last: " + root.permissionClient.lastAgentAction + " • " + root.permissionClient.lastAgentResult
-                : "Use structured commands to operate the system safely."
-            color: "#8f99ad"
-            font.pixelSize: 11
-            wrapMode: Text.WordWrap
+            Label {
+                text: "Ask Velyx"
+                color: Theme.textPrimary
+                font.family: Theme.fontDisplay
+                font.pixelSize: 18
+                font.weight: Font.DemiBold
+            }
+
+            Label {
+                text: root.permissionClient.lastAgentAction.length > 0
+                    ? "Last operator action: " + root.permissionClient.lastAgentAction + " • " + root.permissionClient.lastAgentResult
+                    : "Use structured commands to move the system, not individual processes."
+                color: Theme.textSecondary
+                font.pixelSize: 11
+                wrapMode: Text.WordWrap
+            }
         }
 
         TextField {
             id: commandField
             Layout.fillWidth: true
-            placeholderText: "run dev_start • switch safe-web • status • recovery"
-            color: "#f3f6fb"
-            placeholderTextColor: "#6f7890"
+            placeholderText: "run dev_start  •  switch safe-web  •  status  •  recovery"
+            color: Theme.textPrimary
+            placeholderTextColor: Theme.textMuted
             selectByMouse: true
             onAccepted: {
                 root.permissionClient.runAgentCommand(text)
@@ -46,7 +53,7 @@ Rectangle {
             }
         }
 
-        RowLayout {
+        Flow {
             Layout.fillWidth: true
             spacing: 8
 
@@ -59,11 +66,6 @@ Rectangle {
                 text: "Safe Browse"
                 onClicked: root.permissionClient.runAgentCommand("run safe_browse")
             }
-        }
-
-        RowLayout {
-            Layout.fillWidth: true
-            spacing: 8
 
             Button {
                 text: "Recovery"
@@ -71,7 +73,7 @@ Rectangle {
             }
 
             Button {
-                text: "Update System"
+                text: "Update"
                 onClicked: root.permissionClient.runAgentCommand("update")
             }
 
@@ -84,18 +86,18 @@ Rectangle {
         Rectangle {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            radius: 14
-            color: "#151d2a"
+            radius: Theme.radiusMd
+            color: Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.08)
             border.width: 1
-            border.color: Qt.rgba(1, 1, 1, 0.08)
+            border.color: Theme.shellStroke
 
             Label {
                 anchors.fill: parent
-                anchors.margins: 12
+                anchors.margins: Theme.space4
                 text: root.permissionClient.agentSummary.length > 0
                     ? root.permissionClient.agentSummary
                     : "Summary unavailable"
-                color: "#c7d0df"
+                color: Theme.textSecondary
                 font.pixelSize: 11
                 wrapMode: Text.WordWrap
                 verticalAlignment: Text.AlignTop

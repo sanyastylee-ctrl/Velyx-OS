@@ -18,11 +18,13 @@ qt_add_qml_module(velyx-shell
         qml/SpaceCard.qml
         qml/IntentCard.qml
         qml/AgentPanel.qml
+        qml/AutomationPanel.qml
         qml/AppCard.qml
         qml/SystemStatusPanel.qml
         qml/SpaceOverviewPanel.qml
         qml/OpenAppsPanel.qml
         qml/DetailsPanel.qml
+        qml/SuggestedActionsPanel.qml
         ai/AIOverlay.qml
         ai/AICommandPalette.qml
         ai/AIResultCard.qml

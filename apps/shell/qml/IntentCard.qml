@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
+import Velyx.DesignSystem
 
 Rectangle {
     id: root
@@ -10,19 +11,26 @@ Rectangle {
     required property string lastIntentResult
     signal runRequested(string intentId)
 
-    radius: 16
-    color: root.intent.intent_id === root.lastIntentId ? "#1b2433" : "#141a25"
+    radius: Theme.radiusLg
+    color: root.intent.intent_id === root.lastIntentId ? Theme.shellSurfaceOverlay : Theme.shellSurfaceRaised
     border.width: 1
-    border.color: root.intent.intent_id === root.lastIntentId ? "#5b8cff" : Qt.rgba(1, 1, 1, 0.08)
-    implicitHeight: 92
+    border.color: root.intent.intent_id === root.lastIntentId
+        ? Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.34)
+        : Theme.shellStroke
+    implicitHeight: 110
+
+    Behavior on color {
+        ColorAnimation { duration: Theme.motionBase }
+    }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 14
-        spacing: 8
+        anchors.margins: Theme.space4
+        spacing: Theme.space3
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: Theme.space3
 
             ColumnLayout {
                 Layout.fillWidth: true
@@ -30,15 +38,18 @@ Rectangle {
 
                 Label {
                     text: root.intent.display_name || root.intent.intent_id
-                    color: "#f3f6fb"
-                    font.pixelSize: 14
+                    color: Theme.textPrimary
+                    font.family: Theme.fontSans
+                    font.pixelSize: 15
                     font.weight: Font.DemiBold
+                    elide: Text.ElideRight
                 }
 
                 Label {
-                    text: (root.intent.target_space || "-") + " • " + (root.intent.status || "enabled")
-                    color: "#8f99ad"
+                    text: (root.intent.target_space || "-") + "  •  " + (root.intent.status || "enabled")
+                    color: Theme.textMuted
                     font.pixelSize: 11
+                    elide: Text.ElideRight
                 }
             }
 
@@ -53,9 +64,9 @@ Rectangle {
             Layout.fillWidth: true
             text: root.intent.intent_id === root.lastIntentId && root.lastIntentResult.length > 0
                 ? "Last result: " + root.lastIntentResult
-                : (root.intent.description || "")
-            color: "#a4afc3"
-            font.pixelSize: 11
+                : (root.intent.description || "Move the system into the target context.")
+            color: root.intent.intent_id === root.lastIntentId ? Theme.accentCoolStrong : Theme.textSecondary
+            font.pixelSize: 12
             wrapMode: Text.WordWrap
         }
     }

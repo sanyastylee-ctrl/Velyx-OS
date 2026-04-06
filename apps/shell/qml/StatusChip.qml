@@ -13,32 +13,47 @@ Rectangle {
 
     function toneColor() {
         if (tone === "success")
-            return "#2f9e6f"
+            return Theme.success
         if (tone === "warning")
-            return "#d6a44a"
+            return Theme.warning
         if (tone === "danger")
-            return "#cf5c61"
+            return Theme.danger
         if (tone === "accent")
-            return "#5b8cff"
-        return "#6b7280"
+            return Theme.accentCool
+        return Theme.info
     }
 
-    radius: compact ? 14 : 18
-    color: "#161c28"
+    function fillColor() {
+        const base = toneColor()
+        return Qt.rgba(base.r, base.g, base.b, compact ? 0.12 : 0.14)
+    }
+
+    radius: compact ? Theme.radiusMd : Theme.radiusLg
+    color: fillColor()
     border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.08)
-    implicitWidth: compact ? 170 : 210
-    implicitHeight: compact ? 54 : 68
+    border.color: Qt.rgba(toneColor().r, toneColor().g, toneColor().b, 0.25)
+    implicitWidth: compact ? 168 : 210
+    implicitHeight: compact ? 58 : 72
+
+    Behavior on color {
+        ColorAnimation { duration: Theme.motionBase }
+    }
+
+    Behavior on border.color {
+        ColorAnimation { duration: Theme.motionBase }
+    }
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: compact ? 10 : 14
-        spacing: compact ? 2 : 4
+        anchors.margins: compact ? Theme.space3 : Theme.space4
+        spacing: compact ? 4 : 6
 
         Label {
             text: root.label
-            color: "#8f99ad"
+            color: Theme.textMuted
+            font.family: Theme.fontSans
             font.pixelSize: compact ? 11 : 12
+            font.weight: Font.Medium
         }
 
         RowLayout {
@@ -46,16 +61,17 @@ Rectangle {
             spacing: 8
 
             Rectangle {
-                width: 8
-                height: 8
-                radius: 4
+                width: 9
+                height: 9
+                radius: 4.5
                 color: root.toneColor()
             }
 
             Label {
                 Layout.fillWidth: true
                 text: root.value
-                color: "#f3f6fb"
+                color: Theme.textPrimary
+                font.family: Theme.fontSans
                 font.pixelSize: compact ? 13 : 14
                 font.weight: Font.DemiBold
                 elide: Text.ElideRight

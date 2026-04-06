@@ -10,47 +10,113 @@ Rectangle {
     required property var permissionClient
     property bool showAdvanced: false
 
-    radius: 24
-    color: "#111722"
+    radius: Theme.radiusLg
+    color: Theme.shellSurface
     border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.08)
+    border.color: Theme.shellStroke
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 18
-        spacing: 12
+        anchors.margins: Theme.space5
+        spacing: Theme.space4
 
         RowLayout {
             Layout.fillWidth: true
+            spacing: Theme.space3
 
             ColumnLayout {
                 Layout.fillWidth: true
                 spacing: 4
 
                 Label {
-                    text: root.permissionClient.selectedAppInfo.display_name || "No app selected"
-                    color: "#f3f6fb"
-                    font.pixelSize: 18
+                    text: root.permissionClient.selectedAppInfo.display_name || "No selection"
+                    color: Theme.textPrimary
+                    font.family: Theme.fontDisplay
+                    font.pixelSize: 20
                     font.weight: Font.DemiBold
                 }
 
                 Label {
-                    text: root.permissionClient.selectedAppInfo.app_id || "Choose an app or running window"
-                    color: "#8f99ad"
+                    text: root.permissionClient.selectedAppInfo.app_id || "Select an app or running window for more detail."
+                    color: Theme.textMuted
                     font.pixelSize: 12
+                    wrapMode: Text.WordWrap
                 }
             }
 
             Button {
-                text: root.showAdvanced ? "Hide debug" : "Show debug"
+                text: root.showAdvanced ? "Hide advanced" : "Show advanced"
                 onClicked: root.showAdvanced = !root.showAdvanced
+            }
+        }
+
+        Rectangle {
+            Layout.fillWidth: true
+            radius: Theme.radiusMd
+            color: Qt.rgba(
+                (root.permissionClient.launchStatus === "denied"
+                    ? Theme.danger
+                    : ((root.permissionClient.launchStatus === "manifest_invalid"
+                        || root.permissionClient.launchStatus === "executable_invalid"
+                        || root.permissionClient.launchStatus === "profile_invalid"
+                        || root.permissionClient.launchStatus === "sandbox_failed"
+                        || root.permissionClient.launchStatus === "security_failed"
+                        || root.permissionClient.launchStatus === "failed")
+                       ? Theme.warning
+                       : Theme.accentCool)).r,
+                (root.permissionClient.launchStatus === "denied"
+                    ? Theme.danger
+                    : ((root.permissionClient.launchStatus === "manifest_invalid"
+                        || root.permissionClient.launchStatus === "executable_invalid"
+                        || root.permissionClient.launchStatus === "profile_invalid"
+                        || root.permissionClient.launchStatus === "sandbox_failed"
+                        || root.permissionClient.launchStatus === "security_failed"
+                        || root.permissionClient.launchStatus === "failed")
+                       ? Theme.warning
+                       : Theme.accentCool)).g,
+                (root.permissionClient.launchStatus === "denied"
+                    ? Theme.danger
+                    : ((root.permissionClient.launchStatus === "manifest_invalid"
+                        || root.permissionClient.launchStatus === "executable_invalid"
+                        || root.permissionClient.launchStatus === "profile_invalid"
+                        || root.permissionClient.launchStatus === "sandbox_failed"
+                        || root.permissionClient.launchStatus === "security_failed"
+                        || root.permissionClient.launchStatus === "failed")
+                       ? Theme.warning
+                       : Theme.accentCool)).b,
+                0.12
+            )
+            border.width: 1
+            border.color: Theme.shellStroke
+            implicitHeight: 116
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: Theme.space4
+                spacing: 8
+
+                Label {
+                    text: "Current message"
+                    color: Theme.textMuted
+                    font.pixelSize: 11
+                }
+
+                Label {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: root.permissionClient.launchResultMessage.length > 0
+                        ? root.permissionClient.launchResultMessage
+                        : "System is ready for the next action."
+                    color: Theme.textPrimary
+                    font.pixelSize: 13
+                }
             }
         }
 
         ListRow {
             title: "Security"
             subtitle: (root.permissionClient.selectedAppInfo.trust_level || "-")
-                + " • " + (root.permissionClient.selectedAppInfo.sandbox_profile || "-")
+                + "  •  " + (root.permissionClient.selectedAppInfo.sandbox_profile || "-")
         }
 
         ListRow {
@@ -61,58 +127,49 @@ Rectangle {
         ListRow {
             title: "Last outcome"
             subtitle: root.permissionClient.lastResult.length > 0
-                ? root.permissionClient.lastResult + " • " + root.permissionClient.lastReason
+                ? root.permissionClient.lastResult + "  •  " + root.permissionClient.lastReason
                 : "No recent action"
         }
 
         Rectangle {
             Layout.fillWidth: true
-            radius: 16
-            color: "#151d2a"
+            visible: !root.showAdvanced
+            radius: Theme.radiusMd
+            color: Qt.rgba(1, 1, 1, 0.03)
             border.width: 1
-            border.color: Qt.rgba(1, 1, 1, 0.08)
-            implicitHeight: 110
+            border.color: Theme.shellStroke
+            implicitHeight: 90
 
             ColumnLayout {
                 anchors.fill: parent
-                anchors.margins: 14
-                spacing: 8
+                anchors.margins: Theme.space4
+                spacing: 4
 
                 Label {
-                    text: "Current message"
-                    color: "#8f99ad"
-                    font.pixelSize: 12
+                    text: "Operational details"
+                    color: Theme.textPrimary
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
                 }
 
                 Label {
-                    Layout.fillWidth: true
+                    text: "Advanced runtime fields stay available here, but they do not dominate the main workspace."
+                    color: Theme.textMuted
+                    font.pixelSize: 11
                     wrapMode: Text.WordWrap
-                    text: root.permissionClient.launchResultMessage.length > 0
-                        ? root.permissionClient.launchResultMessage
-                        : "System is ready for the next action."
-                    color: root.permissionClient.launchStatus === "denied"
-                        ? "#ffb4b9"
-                        : ((root.permissionClient.launchStatus === "manifest_invalid"
-                            || root.permissionClient.launchStatus === "executable_invalid"
-                            || root.permissionClient.launchStatus === "profile_invalid"
-                            || root.permissionClient.launchStatus === "sandbox_failed"
-                            || root.permissionClient.launchStatus === "security_failed"
-                            || root.permissionClient.launchStatus === "failed")
-                           ? "#ffd08a"
-                           : "#e8edf7")
-                    font.pixelSize: 13
                 }
             }
         }
 
-        Item {
+        ScrollView {
             Layout.fillWidth: true
             Layout.fillHeight: true
+            visible: root.showAdvanced
+            clip: true
 
             ColumnLayout {
-                anchors.fill: parent
+                width: parent.width
                 spacing: 8
-                visible: root.showAdvanced
 
                 ListRow { title: "Runtime"; subtitle: root.permissionClient.selectedAppInfo.runtime_state || "idle" }
                 ListRow { title: "PID"; subtitle: root.permissionClient.selectedAppInfo.runtime_pid || "-" }

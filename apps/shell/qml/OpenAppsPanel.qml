@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import Velyx.DesignSystem
+import Velyx.UI
 
 Rectangle {
     id: root
@@ -11,39 +12,50 @@ Rectangle {
     property var appsModel: []
     required property var permissionClient
 
-    radius: 22
-    color: "#111722"
+    radius: Theme.radiusLg
+    color: Theme.shellSurface
     border.width: 1
-    border.color: Qt.rgba(1, 1, 1, 0.08)
+    border.color: Theme.shellStroke
 
     ColumnLayout {
         anchors.fill: parent
-        anchors.margins: 18
-        spacing: 12
+        anchors.margins: Theme.space5
+        spacing: Theme.space3
 
-        ColumnLayout {
+        SectionHeader {
             Layout.fillWidth: true
-            spacing: 4
-
-            Label {
-                text: root.title
-                color: "#f3f6fb"
-                font.pixelSize: 18
-                font.weight: Font.DemiBold
-            }
-
-            Label {
-                text: root.subtitle
-                color: "#8f99ad"
-                font.pixelSize: 12
-            }
+            title: root.title
+            subtitle: root.subtitle
         }
 
-        Label {
+        Rectangle {
+            Layout.fillWidth: true
             visible: root.appsModel.length === 0
-            text: "No running apps in this section"
-            color: "#7f8aa0"
-            font.pixelSize: 13
+            radius: Theme.radiusMd
+            color: Qt.rgba(1, 1, 1, 0.03)
+            border.width: 1
+            border.color: Theme.shellStroke
+            implicitHeight: 74
+
+            ColumnLayout {
+                anchors.fill: parent
+                anchors.margins: Theme.space4
+                spacing: 4
+
+                Label {
+                    text: "Nothing active here"
+                    color: Theme.textPrimary
+                    font.pixelSize: 13
+                    font.weight: Font.DemiBold
+                }
+
+                Label {
+                    text: "This section will fill as windows align with the current context."
+                    color: Theme.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
+                }
+            }
         }
 
         ListView {
