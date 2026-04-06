@@ -6,6 +6,8 @@ build/
 out/
 dist/
 .cache/
+__pycache__/
+*.pyc
 *.user
 *.swp
 *.swo

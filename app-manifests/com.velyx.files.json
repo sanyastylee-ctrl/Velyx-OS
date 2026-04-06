@@ -1,6 +1,7 @@
 {
   "app_id": "com.velyx.files",
   "display_name": "Файлы",
+  "version": "1.0.0",
   "executable_path": "/usr/bin/env",
   "requested_permissions": [
     "filesystem"

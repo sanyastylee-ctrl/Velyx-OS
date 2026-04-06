@@ -1,0 +1,486 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+from copy import deepcopy
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+KNOWN_PROFILES = {"minimal", "browser", "files", "desktop-basic", "trusted-system"}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV_FILE_VALUES = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV_FILE_VALUES.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+PREFIX = Path(os.environ.get("VELYX_INSTALL_PREFIX") or ENV_FILE_VALUES.get("VELYX_INSTALL_PREFIX") or (Path.home() / ".local/share/velyx"))
+SYSTEM_MANIFESTS_DIR = Path(os.environ.get("VELYX_MANIFESTS_DIR") or ENV_FILE_VALUES.get("VELYX_MANIFESTS_DIR") or (PREFIX / "share/app-manifests"))
+REGISTRY_PATH = STATE_DIR / "apps_registry.json"
+USER_APPS_DIR = STATE_DIR / "apps"
+APP_LOG_PATH = STATE_DIR / "app_registry.log"
+USER_INSTALL_SOURCE = "user"
+SYSTEM_INSTALL_SOURCE = "system"
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with APP_LOG_PATH.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def load_registry() -> dict:
+    ensure_registry_seeded()
+    if not REGISTRY_PATH.exists():
+        return {"apps": []}
+    return json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+
+
+def save_registry(registry: dict) -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = REGISTRY_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(registry, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(REGISTRY_PATH)
+
+
+def default_version(manifest: dict) -> str:
+    return manifest.get("version") or "0.1.0"
+
+
+def manifest_path_from_source(source: Path) -> Path:
+    if source.is_dir():
+        for candidate in ("manifest.json", f"{source.name}.json"):
+            path = source / candidate
+            if path.exists():
+                return path
+        raise RuntimeError(f"manifest not found in directory {source}")
+    return source
+
+
+def load_manifest(source: Path) -> dict:
+    manifest_path = manifest_path_from_source(source)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.setdefault("version", "0.1.0")
+    manifest.setdefault("category", "utility")
+    manifest.setdefault("requested_permissions", [])
+    return manifest
+
+
+def validate_manifest(manifest: dict) -> None:
+    required = ["app_id", "display_name", "executable_path", "sandbox_profile", "trust_level"]
+    for key in required:
+        if not str(manifest.get(key, "")).strip():
+            raise RuntimeError(f"{key}_missing")
+    if not str(manifest.get("version", "")).strip():
+        raise RuntimeError("version_missing")
+    permissions = manifest.get("requested_permissions", [])
+    if not isinstance(permissions, list):
+        raise RuntimeError("permissions_invalid")
+    if any(not str(item).strip() for item in permissions):
+        raise RuntimeError("permission_entry_invalid")
+    profile = str(manifest.get("sandbox_profile", "")).strip()
+    if profile not in KNOWN_PROFILES:
+        raise RuntimeError("profile_invalid")
+
+
+def executable_status(executable_path: str) -> str:
+    path = Path(executable_path)
+    if not path.is_absolute():
+        return "broken"
+    if not path.exists() or not path.is_file():
+        return "broken"
+    if os.name != "nt" and not os.access(path, os.X_OK):
+        return "broken"
+    return "installed"
+
+
+def ensure_registry_seeded() -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    USER_APPS_DIR.mkdir(parents=True, exist_ok=True)
+    if REGISTRY_PATH.exists():
+        try:
+            registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+            if registry.get("apps"):
+                return
+        except Exception:
+            pass
+    sync_system_apps(preserve_removed=True, quiet=True)
+
+
+def make_entry(manifest: dict, install_source: str, install_time: str, status: str, manifest_path: Path, payload_root: Path) -> dict:
+    return {
+        "app_id": manifest["app_id"],
+        "display_name": manifest["display_name"],
+        "version": default_version(manifest),
+        "executable_path": manifest["executable_path"],
+        "requested_permissions": manifest.get("requested_permissions", []),
+        "trust_level": manifest["trust_level"],
+        "category": manifest.get("category", "utility"),
+        "sandbox_profile": manifest["sandbox_profile"],
+        "install_source": install_source,
+        "install_time": install_time,
+        "status": status,
+        "manifest_path": str(manifest_path),
+        "payload_root": str(payload_root),
+    }
+
+
+def sync_system_apps(preserve_removed: bool = True, quiet: bool = False) -> None:
+    registry = {"apps": []}
+    if REGISTRY_PATH.exists():
+        registry = json.loads(REGISTRY_PATH.read_text(encoding="utf-8"))
+    apps = {entry["app_id"]: entry for entry in registry.get("apps", [])}
+    if not SYSTEM_MANIFESTS_DIR.exists():
+        save_registry({"apps": list(apps.values())})
+        return
+
+    for manifest_path in sorted(SYSTEM_MANIFESTS_DIR.glob("*.json")):
+        manifest = load_manifest(manifest_path)
+        validate_manifest(manifest)
+        existing = apps.get(manifest["app_id"])
+        if preserve_removed and existing and existing.get("status") == "removed":
+            continue
+        entry = make_entry(
+            manifest,
+            SYSTEM_INSTALL_SOURCE,
+            existing.get("install_time") if existing else now_iso(),
+            executable_status(manifest["executable_path"]),
+            manifest_path,
+            SYSTEM_MANIFESTS_DIR,
+        )
+        apps[manifest["app_id"]] = entry
+
+    save_registry({"apps": sorted(apps.values(), key=lambda item: item["app_id"])})
+    if not quiet:
+        log_event("app_registry_sync", "ok", f"source=system count={len(apps)}")
+
+
+def find_entry(registry: dict, app_id: str):
+    for entry in registry.get("apps", []):
+        if entry.get("app_id") == app_id:
+            return entry
+    return None
+
+
+def normalize_user_manifest(manifest: dict, source_path: Path, install_root: Path) -> dict:
+    normalized = deepcopy(manifest)
+    executable = Path(normalized["executable_path"])
+    if not executable.is_absolute():
+        if not source_path.is_dir():
+            raise RuntimeError("relative_executable_requires_directory_payload")
+        normalized["executable_path"] = str((install_root / "payload" / executable).resolve())
+    return normalized
+
+
+def copy_payload(source_path: Path, install_root: Path) -> None:
+    if install_root.exists():
+        shutil.rmtree(install_root)
+    install_root.mkdir(parents=True, exist_ok=True)
+    if source_path.is_dir():
+        shutil.copytree(source_path, install_root / "payload", dirs_exist_ok=True)
+    else:
+        (install_root / "payload").mkdir(parents=True, exist_ok=True)
+
+
+def write_manifest(manifest: dict, install_root: Path) -> Path:
+    manifest_path = install_root / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path
+
+
+def try_busctl(*args: str) -> subprocess.CompletedProcess:
+    if shutil.which("busctl") is None:
+        raise RuntimeError("busctl_unavailable")
+    return subprocess.run(["busctl", "--user", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def runtime_is_running(app_id: str) -> bool:
+    try:
+        result = try_busctl(
+            "call",
+            "com.velyx.Launcher",
+            "/com/velyx/Launcher",
+            "com.velyx.Launcher1",
+            "GetAppRuntime",
+            "s",
+            app_id,
+        )
+    except RuntimeError:
+        return False
+    if result.returncode != 0:
+        return False
+    return "running" in result.stdout or "starting" in result.stdout
+
+
+def stop_app(app_id: str) -> None:
+    try:
+        try_busctl(
+            "call",
+            "com.velyx.Launcher",
+            "/com/velyx/Launcher",
+            "com.velyx.Launcher1",
+            "StopApp",
+            "s",
+            app_id,
+        )
+    except RuntimeError:
+        return
+
+
+def restart_app(app_id: str) -> None:
+    try:
+        try_busctl(
+            "call",
+            "com.velyx.Launcher",
+            "/com/velyx/Launcher",
+            "com.velyx.Launcher1",
+            "RestartApp",
+            "s",
+            app_id,
+        )
+    except RuntimeError:
+        return
+
+
+def compare_versions(left: str, right: str) -> int:
+    def tokenize(value: str):
+        parts = []
+        for token in value.replace("-", ".").split("."):
+            if token.isdigit():
+                parts.append((0, int(token)))
+            else:
+                parts.append((1, token))
+        return parts
+
+    a = tokenize(left)
+    b = tokenize(right)
+    for idx in range(max(len(a), len(b))):
+        left_part = a[idx] if idx < len(a) else (0, 0)
+        right_part = b[idx] if idx < len(b) else (0, 0)
+        if left_part < right_part:
+            return -1
+        if left_part > right_part:
+            return 1
+    return 0
+
+
+def cmd_list() -> int:
+    registry = load_registry()
+    visible = [entry for entry in registry.get("apps", []) if entry.get("status") != "removed"]
+    for entry in sorted(visible, key=lambda item: item["app_id"]):
+        print(
+            f"{entry['app_id']}\t{entry['version']}\t{entry['install_source']}\t{entry['status']}\t{entry['display_name']}"
+        )
+    return 0
+
+
+def cmd_info(app_id: str) -> int:
+    registry = load_registry()
+    entry = find_entry(registry, app_id)
+    if not entry:
+        print(f"app not found: {app_id}", file=sys.stderr)
+        return 1
+    print(json.dumps(entry, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_install(source: str) -> int:
+    source_path = Path(source).expanduser().resolve()
+    log_event("app_install_begin", "started", f"source={source_path}")
+    if not source_path.exists():
+        log_event("app_install_failed", "failed", "reason=missing_source")
+        print(f"missing source: {source_path}", file=sys.stderr)
+        return 1
+
+    manifest = load_manifest(source_path)
+    try:
+        validate_manifest(manifest)
+    except RuntimeError as exc:
+        log_event("app_install_failed", "failed", f"reason={exc}")
+        print(f"invalid manifest: {exc}", file=sys.stderr)
+        return 1
+
+    registry = load_registry()
+    existing = find_entry(registry, manifest["app_id"])
+    if existing and existing.get("status") != "removed":
+        log_event("app_install_failed", "failed", "reason=duplicate_app_id")
+        print(f"app already installed: {manifest['app_id']}", file=sys.stderr)
+        return 1
+
+    install_root = USER_APPS_DIR / manifest["app_id"]
+    normalized_manifest = normalize_user_manifest(manifest, source_path, install_root)
+    copy_payload(source_path, install_root)
+    manifest_path = write_manifest(normalized_manifest, install_root)
+    entry = make_entry(
+        normalized_manifest,
+        USER_INSTALL_SOURCE,
+        now_iso(),
+        executable_status(normalized_manifest["executable_path"]),
+        manifest_path,
+        install_root,
+    )
+
+    apps = [item for item in registry.get("apps", []) if item.get("app_id") != entry["app_id"]]
+    apps.append(entry)
+    save_registry({"apps": sorted(apps, key=lambda item: item["app_id"])})
+    log_event("app_install_ok", "ok", f"app_id={entry['app_id']} status={entry['status']}")
+    print(f"installed {entry['app_id']} version={entry['version']} status={entry['status']}")
+    return 0
+
+
+def cmd_remove(app_id: str, force_system: bool) -> int:
+    registry = load_registry()
+    entry = find_entry(registry, app_id)
+    if not entry:
+        print(f"app not found: {app_id}", file=sys.stderr)
+        return 1
+    if entry["install_source"] == SYSTEM_INSTALL_SOURCE and not force_system:
+        print(f"refusing to remove system app without --force-system: {app_id}", file=sys.stderr)
+        return 1
+
+    log_event("app_remove_begin", "started", f"app_id={app_id}")
+    if runtime_is_running(app_id):
+        stop_app(app_id)
+
+    if entry["install_source"] == USER_INSTALL_SOURCE:
+        payload_root = Path(entry.get("payload_root") or USER_APPS_DIR / app_id)
+        if payload_root.exists():
+            shutil.rmtree(payload_root, ignore_errors=True)
+
+    for item in registry.get("apps", []):
+        if item.get("app_id") == app_id:
+            item["status"] = "removed"
+    save_registry(registry)
+    log_event("app_remove_ok", "ok", f"app_id={app_id}")
+    print(f"removed {app_id}")
+    return 0
+
+
+def cmd_update(app_id: str, source: str, allow_downgrade: bool) -> int:
+    registry = load_registry()
+    existing = find_entry(registry, app_id)
+    if not existing:
+        print(f"app not found: {app_id}", file=sys.stderr)
+        return 1
+    if existing["install_source"] == SYSTEM_INSTALL_SOURCE:
+        print(f"system app update not supported via velyx-app: {app_id}", file=sys.stderr)
+        return 1
+
+    source_path = Path(source).expanduser().resolve()
+    log_event("app_update_begin", "started", f"app_id={app_id} source={source_path}")
+    manifest = load_manifest(source_path)
+    if manifest.get("app_id") != app_id:
+        log_event("app_update_failed", "failed", "reason=app_id_mismatch")
+        print("app_id mismatch between registry and payload", file=sys.stderr)
+        return 1
+    try:
+        validate_manifest(manifest)
+    except RuntimeError as exc:
+        log_event("app_update_failed", "failed", f"reason={exc}")
+        print(f"invalid manifest: {exc}", file=sys.stderr)
+        return 1
+
+    new_version = default_version(manifest)
+    old_version = existing.get("version", "0.1.0")
+    cmp_result = compare_versions(new_version, old_version)
+    if cmp_result == 0:
+        print(f"version unchanged: {new_version}", file=sys.stderr)
+        return 1
+    if cmp_result < 0 and not allow_downgrade:
+        print(f"downgrade blocked: {old_version} -> {new_version}", file=sys.stderr)
+        return 1
+
+    install_root = USER_APPS_DIR / app_id
+    staged_root = USER_APPS_DIR / f"{app_id}.staged"
+    normalized_manifest = normalize_user_manifest(manifest, source_path, staged_root)
+    if staged_root.exists():
+        shutil.rmtree(staged_root, ignore_errors=True)
+    copy_payload(source_path, staged_root)
+    manifest_path = write_manifest(normalized_manifest, staged_root)
+
+    running = runtime_is_running(app_id)
+    if running:
+        stop_app(app_id)
+
+    if install_root.exists():
+        shutil.rmtree(install_root, ignore_errors=True)
+    staged_root.replace(install_root)
+    manifest_path = install_root / "manifest.json"
+
+    updated_entry = make_entry(
+        normalized_manifest,
+        USER_INSTALL_SOURCE,
+        existing.get("install_time", now_iso()),
+        executable_status(normalized_manifest["executable_path"]),
+        manifest_path,
+        install_root,
+    )
+    apps = [item for item in registry.get("apps", []) if item.get("app_id") != app_id]
+    apps.append(updated_entry)
+    save_registry({"apps": sorted(apps, key=lambda item: item["app_id"])})
+
+    if running:
+        restart_app(app_id)
+
+    log_event("app_update_ok", "ok", f"app_id={app_id} from={old_version} to={new_version} status={updated_entry['status']}")
+    print(f"updated {app_id} {old_version} -> {new_version} status={updated_entry['status']}")
+    return 0
+
+
+def usage() -> int:
+    print(
+        "usage: velyx-app list | info <app_id> | install <path> | remove [--force-system] <app_id> | update [--allow-downgrade] <app_id> <path> | sync-system",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return usage()
+
+    command = sys.argv[1]
+    if command == "list":
+        return cmd_list()
+    if command == "info" and len(sys.argv) == 3:
+        return cmd_info(sys.argv[2])
+    if command == "install" and len(sys.argv) == 3:
+        return cmd_install(sys.argv[2])
+    if command == "remove":
+        force_system = "--force-system" in sys.argv[2:]
+        args = [arg for arg in sys.argv[2:] if arg != "--force-system"]
+        if len(args) != 1:
+            return usage()
+        return cmd_remove(args[0], force_system)
+    if command == "update":
+        allow_downgrade = "--allow-downgrade" in sys.argv[2:]
+        args = [arg for arg in sys.argv[2:] if arg != "--allow-downgrade"]
+        if len(args) != 2:
+            return usage()
+        return cmd_update(args[0], args[1], allow_downgrade)
+    if command == "sync-system":
+        sync_system_apps(preserve_removed=True, quiet=False)
+        print("system apps synced into registry")
+        return 0
+    return usage()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

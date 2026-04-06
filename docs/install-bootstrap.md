@@ -55,6 +55,7 @@ Shell стартует не вручную, а как часть user session li
 - `velyx-logs.sh`
 - `velyx-update`
 - `velyx-recovery`
+- `velyx-app`
 
 Они ставятся в `~/.local/bin/`.
 
@@ -75,3 +76,4 @@ velyx-recovery
 Подробности:
 
 - [update-recovery.md](./update-recovery.md)
+- [app-model.md](./app-model.md)

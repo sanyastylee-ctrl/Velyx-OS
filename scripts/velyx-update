@@ -198,6 +198,9 @@ perform_rollback() {
     systemctl --user daemon-reload >/dev/null 2>&1 || true
     systemctl --user restart velyx-session-manager.service >/dev/null 2>&1 || true
     systemctl --user restart velyx-session-bootstrap.service >/dev/null 2>&1 || true
+    if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-app" ]]; then
+      "${PREFIX}/bin/velyx-app" sync-system >/dev/null || true
+    fi
     if health_check; then
       CURRENT_VERSION="$(read_installed_version)"
       rm -rf "${ROLLBACK_PREFIX}.tmp"
@@ -294,6 +297,7 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-launcher-service" \
   "${STAGING_PREFIX}/bin/velyx-update-engine" \
   "${STAGING_PREFIX}/bin/velyx-recovery-service" \
+  "${STAGING_PREFIX}/bin/velyx-app" \
   "${STAGING_PREFIX}/bin/velyx-shell" \
   "${STAGING_PREFIX}/libexec/velyx-user-session-bootstrap" \
   "${STAGING_PREFIX}/libexec/velyx-recovery-bootstrap" \
@@ -339,6 +343,9 @@ if ! render_runtime_units; then
   log_event "update_apply_failed" "failed" "units_refresh_failed=true"
   perform_rollback "${CANDIDATE_VERSION}" || true
   exit 1
+fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-app" ]]; then
+  "${PREFIX}/bin/velyx-app" sync-system >/dev/null || true
 fi
 log_event "update_apply_ok" "ok" "candidate_version=${CANDIDATE_VERSION}"
 

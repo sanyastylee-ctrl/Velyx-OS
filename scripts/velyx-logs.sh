@@ -32,7 +32,9 @@ for file in \
   "${STATE_DIR}/sandbox_audit.log" \
   "${STATE_DIR}/shell_mvp.log" \
   "${STATE_DIR}/update.log" \
-  "${STATE_DIR}/update_state.json"
+  "${STATE_DIR}/update_state.json" \
+  "${STATE_DIR}/app_registry.log" \
+  "${STATE_DIR}/apps_registry.json"
 do
   if [[ -f "${file}" ]]; then
     echo "-- ${file} --"

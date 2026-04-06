@@ -14,8 +14,8 @@ use zbus::connection::Builder;
 
 #[tokio::main]
 async fn main() -> zbus::Result<()> {
-    let manifests = match ManifestRegistry::load() {
-        Ok(manifests) => manifests,
+    let registry = match ManifestRegistry::load() {
+        Ok(registry) => registry,
         Err(err) => {
             eprintln!("[launcher-service] startup_error={err}");
             std::process::exit(1);
@@ -36,7 +36,7 @@ async fn main() -> zbus::Result<()> {
 
     let _connection = Builder::session()?
         .name("com.velyx.Launcher")?
-        .serve_at("/com/velyx/Launcher", LauncherApi::new(manifests, audit))?
+        .serve_at("/com/velyx/Launcher", LauncherApi::new(registry, audit))?
         .build()
         .await?;
 

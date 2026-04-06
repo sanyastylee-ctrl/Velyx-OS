@@ -66,6 +66,12 @@ install_script_binary() {
   ln -snf "${BIN_DIR}/${target_name}" "${LOCAL_BIN_DIR}/${target_name}"
 }
 
+install_helper_script() {
+  local source_path="$1"
+  local target_name="$2"
+  install -Dm755 "${source_path}" "${BIN_DIR}/${target_name}"
+}
+
 render_user_unit() {
   local source_path="$1"
   local target_path="$2"
@@ -141,6 +147,7 @@ warn_optional_cmd busctl
 warn_optional_cmd xprop
 warn_optional_cmd wmctrl
 warn_optional_cmd xdotool
+warn_optional_cmd python3
 
 mkdir -p "${BIN_DIR}" "${LIBEXEC_DIR}" "${MANIFESTS_DIR}" "${STATE_DIR}" "${CONFIG_DIR}" "${UNIT_DIR}" "${LOCAL_BIN_DIR}"
 
@@ -169,11 +176,17 @@ if [[ "${MODE}" != "units-only" ]]; then
   install -Dm755 "${ROOT_DIR}/scripts/velyx-firstboot-dispatch.sh" "${LIBEXEC_DIR}/velyx-firstboot-dispatch"
   install -Dm755 "${ROOT_DIR}/scripts/velyx-system-session-bootstrap.sh" "${LIBEXEC_DIR}/velyx-system-session-bootstrap"
   install -Dm755 "${ROOT_DIR}/scripts/velyx-recovery-bootstrap.sh" "${LIBEXEC_DIR}/velyx-recovery-bootstrap"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-status" "velyx-status"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-restart.sh" "velyx-restart.sh"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-logs.sh" "velyx-logs.sh"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-update" "velyx-update"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-recovery" "velyx-recovery"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-app" "velyx-app"
 
   cp -a "${ROOT_DIR}/app-manifests/." "${MANIFESTS_DIR}/"
   write_version_metadata
   if [[ "${MODE}" == "full" ]]; then
-    mkdir -p "${STATE_DIR}/updates/staged" "${STATE_DIR}/updates/failed"
+    mkdir -p "${STATE_DIR}/updates/staged" "${STATE_DIR}/updates/failed" "${STATE_DIR}/apps"
     write_update_state
   fi
 fi
@@ -193,6 +206,8 @@ VELYX_SHELL_BINARY=${BIN_DIR}/velyx-shell
 VELYX_MANIFESTS_DIR=${MANIFESTS_DIR}
 VELYX_INSTALL_PREFIX=${PREFIX}
 VELYX_STATE_DIR=${STATE_DIR}
+VELYX_APP_REGISTRY=${STATE_DIR}/apps_registry.json
+VELYX_USER_APPS_DIR=${STATE_DIR}/apps
 EOF
 
   for unit in "${ROOT_DIR}"/systemd/user/*; do
@@ -209,6 +224,10 @@ EOF
   install_script_binary "${ROOT_DIR}/scripts/velyx-logs.sh" "velyx-logs.sh"
   install_script_binary "${ROOT_DIR}/scripts/velyx-update" "velyx-update"
   install_script_binary "${ROOT_DIR}/scripts/velyx-recovery" "velyx-recovery"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-app" "velyx-app"
+  if command -v python3 >/dev/null 2>&1; then
+    "${BIN_DIR}/velyx-app" sync-system >/dev/null || true
+  fi
 fi
 
 if [[ "${MODE}" == "payload-only" ]]; then

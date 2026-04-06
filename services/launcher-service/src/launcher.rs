@@ -1,5 +1,5 @@
 use crate::audit::LauncherAuditLogger;
-use crate::manifest::{AppManifest, ManifestRegistry};
+use crate::manifest::{AppManifest, AppStatus, ManifestRegistry};
 use crate::sandbox::{validate_profile_name, SandboxLaunchRequest, SandboxRunner};
 use crate::tracking::ProcessTracker;
 use std::collections::HashMap;
@@ -11,7 +11,7 @@ use zbus::message::Header;
 use zbus::names::BusName;
 
 pub struct LauncherApi {
-    manifests: ManifestRegistry,
+    registry: ManifestRegistry,
     tracker: Arc<Mutex<ProcessTracker>>,
     audit: LauncherAuditLogger,
 }
@@ -77,9 +77,9 @@ impl LauncherApi {
         payload
     }
 
-    pub fn new(manifests: ManifestRegistry, audit: LauncherAuditLogger) -> Self {
+    pub fn new(registry: ManifestRegistry, audit: LauncherAuditLogger) -> Self {
         Self {
-            manifests,
+            registry,
             tracker: Arc::new(Mutex::new(ProcessTracker::default())),
             audit,
         }
@@ -373,7 +373,11 @@ impl LauncherApi {
             }
         }
 
-        let Some(manifest) = self.manifests.get(app_id).cloned() else {
+        let Some(entry) = self
+            .registry
+            .get(app_id)
+            .map_err(zbus::fdo::Error::Failed)?
+        else {
             let _ = self
                 .audit
                 .log_launch_history(
@@ -396,6 +400,25 @@ impl LauncherApi {
                 "fix_manifest",
             ));
         };
+        if entry.status == AppStatus::Broken {
+            let _ = self.audit.log_launch_history(
+                app_id,
+                "controlled_launch_denied",
+                entry.trust_level.as_str(),
+                "deny",
+                &entry.sandbox_profile,
+                "app_status_broken",
+            );
+            return Ok(Self::build_terminal_payload(
+                "manifest_invalid",
+                &format!("Запуск {} заблокирован: app status=broken", app_id),
+                app_id,
+                "",
+                "app_broken",
+                "repair_or_reinstall",
+            ));
+        }
+        let manifest = entry.to_manifest();
         let _ = self.audit.log_launch_history(
             app_id,
             "launch_requested",
@@ -717,11 +740,12 @@ impl LauncherApi {
     }
 
     async fn get_app_info(&self, app_id: &str) -> zbus::fdo::Result<HashMap<String, String>> {
-        let manifest = self.manifests.get(app_id).ok_or_else(|| {
+        let entry = self.registry.get(app_id).map_err(zbus::fdo::Error::Failed)?.ok_or_else(|| {
             zbus::fdo::Error::Failed(format!("app manifest not found for {app_id}"))
         })?;
-        let mut payload = manifest.to_map();
-        Self::enrich_manifest_security(manifest, &mut payload);
+        let manifest = entry.to_manifest();
+        let mut payload = entry.to_map();
+        Self::enrich_manifest_security(&manifest, &mut payload);
         let tracker = self.tracker.lock().await;
         payload.insert(
             "running_instances".to_string(),
@@ -752,8 +776,9 @@ impl LauncherApi {
     async fn list_apps(&self) -> zbus::fdo::Result<Vec<HashMap<String, String>>> {
         let mut apps = Vec::new();
         let tracker = self.tracker.lock().await;
-        for manifest in self.manifests.list() {
-            let mut payload = manifest.to_map();
+        for entry in self.registry.list().map_err(zbus::fdo::Error::Failed)? {
+            let manifest = entry.to_manifest();
+            let mut payload = entry.to_map();
             Self::enrich_manifest_security(&manifest, &mut payload);
             payload.insert(
                 "running_instances".to_string(),
