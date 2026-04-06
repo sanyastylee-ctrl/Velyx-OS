@@ -3,6 +3,23 @@
   "display_name": "Velyx OS VM Profile",
   "channel": "preview",
   "description": "Reference VM deployment profile for installing and running Velyx OS Preview as a shell-first virtual machine environment.",
+  "release_identity": {
+    "product": "Velyx OS Preview",
+    "channel": "preview",
+    "build_target": "velyx-release-preview"
+  },
+  "build_target": {
+    "command": "./scripts/velyx-release-preview build --format both",
+    "validation_command": "./scripts/velyx-release-preview validate <artifact_dir>",
+    "artifacts": [
+      "raw image",
+      "qcow2 image (optional)",
+      "kernel",
+      "initrd",
+      "manifest",
+      "source bundle"
+    ]
+  },
   "minimum_requirements": {
     "memory_gb": 6,
     "vcpus": 2,
@@ -50,6 +67,7 @@
     "Continue into Velyx Shell."
   ],
   "validation_checklist": [
+    "release_builder_available",
     "shell_starts",
     "assistant_available",
     "model_layer_available",

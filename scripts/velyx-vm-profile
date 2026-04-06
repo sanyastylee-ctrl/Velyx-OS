@@ -69,8 +69,10 @@ def validation_report() -> dict:
     update_tool = tool_available("velyx-update")
     dev_tool = tool_available("velyx-dev")
     entry_tool = tool_available("velyx-entry")
+    release_builder = tool_available("velyx-release-preview")
 
     checks = {
+        "release_builder_available": release_builder,
         "entry_available": entry_tool,
         "shell_starts": shell_tool,
         "assistant_available": assistant_tool and command_ok(["python", str(ROOT / "scripts" / "velyx-assistant"), "status"]) if not shutil.which("velyx-assistant") and (ROOT / "scripts" / "velyx-assistant").exists() else assistant_tool,

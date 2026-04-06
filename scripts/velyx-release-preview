@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tarfile
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(__file__).resolve().parent.parent
+DIST_ROOT = ROOT / "dist"
+BUILD_ROOT = ROOT / "build"
+IMAGE_ROOT = BUILD_ROOT / "image"
+QEMU_ROOT = BUILD_ROOT / "qemu"
+RELEASE_PROFILE_PATH = ROOT / "profiles" / "velyx-release-preview.json"
+VM_PROFILE_PATH = ROOT / "profiles" / "velyx-vm-profile.json"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def run_command(command: list[str], *, env: dict[str, str] | None = None, timeout: int = 1800) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, capture_output=True, text=True, check=False, env=env, timeout=timeout)
+
+
+def git_version() -> str:
+    try:
+        result = run_command(["git", "-C", str(ROOT), "rev-parse", "--short", "HEAD"], timeout=20)
+    except Exception:
+        return "unknown"
+    return result.stdout.strip() if result.returncode == 0 else "unknown"
+
+
+def build_identity() -> dict[str, str]:
+    build_id = os.environ.get("VELYX_BUILD_VERSION", "").strip() or git_version()
+    version = build_id if build_id else "unknown"
+    return {
+        "product": "Velyx OS Preview",
+        "channel": "preview",
+        "version": version,
+        "build_id": build_id or "unknown",
+    }
+
+
+def artifact_slug(identity: dict[str, str]) -> str:
+    version = identity["version"].replace("/", "-")
+    build_id = identity["build_id"].replace("/", "-")
+    return f"velyx-os-preview-{version}-{build_id}"
+
+
+def host_check(requested_format: str = "raw") -> dict[str, Any]:
+    profile = load_json(RELEASE_PROFILE_PATH)
+    required_tools = list(profile.get("host_requirements", {}).get("required_tools", []))
+    optional_tools = list(profile.get("host_requirements", {}).get("optional_tools", []))
+    if requested_format in {"qcow2", "both"} and "qemu-img" not in required_tools:
+        optional_tools = [tool for tool in optional_tools if tool != "qemu-img"]
+        required_tools.append("qemu-img")
+
+    available = {tool: bool(shutil.which(tool)) for tool in required_tools + optional_tools}
+    env_summary = {
+        "VELYX_BASE_ROOTFS": os.environ.get("VELYX_BASE_ROOTFS", ""),
+        "VELYX_BIN_DIR": os.environ.get("VELYX_BIN_DIR", str(ROOT / "target" / "release")),
+        "VELYX_SHELL_BINARY": os.environ.get("VELYX_SHELL_BINARY", ""),
+    }
+    env_ok = bool(env_summary["VELYX_BASE_ROOTFS"])
+    if env_ok:
+        env_ok = Path(env_summary["VELYX_BASE_ROOTFS"]).exists()
+
+    status = "ok"
+    missing = [tool for tool in required_tools if not available.get(tool, False)]
+    if missing or not env_ok:
+        status = "failed"
+
+    return {
+        "status": status,
+        "required_tools": {tool: available.get(tool, False) for tool in required_tools},
+        "optional_tools": {tool: available.get(tool, False) for tool in optional_tools},
+        "environment": env_summary,
+        "environment_ready": env_ok,
+        "missing_required_tools": missing,
+        "notes": [
+            "Set VELYX_BASE_ROOTFS to a minimal Linux rootfs with systemd.",
+            "Point VELYX_BIN_DIR at compiled Velyx service binaries.",
+            "Set VELYX_SHELL_BINARY if velyx-shell is not in the binary directory.",
+        ],
+    }
+
+
+def create_source_bundle(destination: Path) -> Path:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    include_paths = [
+        "app-manifests",
+        "apps",
+        "docs",
+        "packages",
+        "profiles",
+        "scripts",
+        "services",
+        "systemd",
+        "CMakeLists.txt",
+        "README.md",
+    ]
+    with tarfile.open(destination, "w:gz") as archive:
+        for relative in include_paths:
+            path = ROOT / relative
+            if path.exists():
+                archive.add(path, arcname=relative)
+    return destination
+
+
+def create_run_script(artifact_dir: Path, image_name: str, image_format: str) -> Path:
+    script_path = artifact_dir / "run-preview.sh"
+    script_path.write_text(
+        "\n".join(
+            [
+                "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                'DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+                'MODE="${VELYX_QEMU_MODE:-windowed}"',
+                'MEMORY_MB="${VELYX_QEMU_MEMORY_MB:-4096}"',
+                'CPUS="${VELYX_QEMU_CPUS:-2}"',
+                f'IMAGE_PATH="${{DIR}}/{image_name}"',
+                'KERNEL_PATH="${DIR}/vmlinuz"',
+                'INITRD_PATH="${DIR}/initrd.img"',
+                'if [[ ! -f "${IMAGE_PATH}" ]]; then echo "image not found: ${IMAGE_PATH}" >&2; exit 1; fi',
+                'if [[ ! -f "${KERNEL_PATH}" ]]; then echo "kernel not found: ${KERNEL_PATH}" >&2; exit 1; fi',
+                'QEMU_ARGS=(',
+                '  -m "${MEMORY_MB}"',
+                '  -smp "${CPUS}"',
+                f'  -drive "file=${{IMAGE_PATH}},format={image_format},if=virtio"',
+                '  -kernel "${KERNEL_PATH}"',
+                '  -append "root=/dev/vda rw console=ttyS0 systemd.unit=multi-user.target"',
+                ')',
+                'if [[ -f "${INITRD_PATH}" ]]; then QEMU_ARGS+=(-initrd "${INITRD_PATH}"); fi',
+                'if [[ "${MODE}" == "headless" ]]; then',
+                '  QEMU_ARGS+=(-nographic -serial mon:stdio)',
+                'else',
+                '  QEMU_ARGS+=(-serial stdio)',
+                'fi',
+                'exec qemu-system-x86_64 "${QEMU_ARGS[@]}"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    script_path.chmod(0o755)
+    return script_path
+
+
+def build_artifact(requested_format: str, output_dir: Path | None) -> dict[str, Any]:
+    release_profile = load_json(RELEASE_PROFILE_PATH)
+    vm_profile = load_json(VM_PROFILE_PATH)
+    identity = build_identity()
+    slug = artifact_slug(identity)
+    artifact_dir = (output_dir or DIST_ROOT) / slug
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+
+    check = host_check(requested_format)
+    if check["status"] != "ok":
+        raise RuntimeError("Host check failed. Run `velyx-release-preview host-check` and fix the missing requirements.")
+
+    env = os.environ.copy()
+    env["VELYX_IMAGE_NAME"] = f"{slug}.img"
+    env["VELYX_BUILD_VERSION"] = identity["build_id"]
+
+    build_result = run_command(["bash", str(ROOT / "scripts" / "build-image.sh")], env=env, timeout=7200)
+    if build_result.returncode != 0:
+        raise RuntimeError(build_result.stderr.strip() or "build-image.sh failed")
+
+    raw_name = env["VELYX_IMAGE_NAME"]
+    raw_source = IMAGE_ROOT / raw_name
+    if not raw_source.exists():
+        raise RuntimeError(f"Expected raw image was not created: {raw_source}")
+
+    raw_target = artifact_dir / raw_name
+    shutil.copy2(raw_source, raw_target)
+
+    qemu_artifacts = []
+    kernel_source = QEMU_ROOT / "vmlinuz"
+    if kernel_source.exists():
+        shutil.copy2(kernel_source, artifact_dir / "vmlinuz")
+        qemu_artifacts.append("vmlinuz")
+    initrd_source = QEMU_ROOT / "initrd.img"
+    if initrd_source.exists():
+        shutil.copy2(initrd_source, artifact_dir / "initrd.img")
+        qemu_artifacts.append("initrd.img")
+
+    created_artifacts = [
+        {
+            "path": str(raw_target),
+            "format": "raw",
+            "type": "disk_image",
+        }
+    ]
+    create_run_script(artifact_dir, raw_name, "raw")
+
+    if requested_format in {"qcow2", "both"}:
+        qcow2_target = artifact_dir / f"{slug}.qcow2"
+        convert_result = run_command(
+            ["qemu-img", "convert", "-f", "raw", "-O", "qcow2", str(raw_target), str(qcow2_target)],
+            timeout=7200,
+        )
+        if convert_result.returncode != 0:
+            raise RuntimeError(convert_result.stderr.strip() or "qemu-img convert failed")
+        created_artifacts.append(
+            {
+                "path": str(qcow2_target),
+                "format": "qcow2",
+                "type": "disk_image",
+            }
+        )
+
+    source_bundle = create_source_bundle(artifact_dir / f"{slug}-source.tar.gz")
+    write_json(artifact_dir / "velyx-vm-profile.json", vm_profile)
+    write_json(artifact_dir / "velyx-release-profile.json", release_profile)
+
+    manifest = {
+        "product": identity["product"],
+        "channel": identity["channel"],
+        "version": identity["version"],
+        "build_id": identity["build_id"],
+        "created_at": now_iso(),
+        "artifact_dir": str(artifact_dir),
+        "artifacts": created_artifacts,
+        "boot_artifacts": qemu_artifacts,
+        "source_bundle": str(source_bundle),
+        "included_components": release_profile.get("included_components", []),
+        "vm_profile": vm_profile.get("profile_id", "velyx-vm-profile"),
+        "validation_commands": [
+            f"./scripts/velyx-release-preview validate \"{artifact_dir}\"",
+            "velyx-vm-profile validate",
+        ],
+        "install_flow": [
+            "Boot the artifact in a VM.",
+            "Enter Velyx Entry.",
+            "Choose Install Velyx.",
+            "Complete installer, reboot, complete First Boot, and continue into Velyx Shell.",
+        ],
+    }
+    write_json(artifact_dir / "manifest.json", manifest)
+
+    return {
+        "status": "ok",
+        "summary": f"Built {identity['product']} artifact in {artifact_dir}.",
+        "artifact_dir": str(artifact_dir),
+        "manifest": manifest,
+        "build_stdout": build_result.stdout.strip(),
+    }
+
+
+def validate_artifact(artifact_dir: Path) -> dict[str, Any]:
+    manifest_path = artifact_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise RuntimeError(f"Artifact manifest not found: {manifest_path}")
+
+    manifest = load_json(manifest_path)
+    artifacts = manifest.get("artifacts", [])
+    checks = {
+        "manifest_present": manifest_path.exists(),
+        "raw_or_qcow2_present": any(Path(entry.get("path", "")).exists() for entry in artifacts),
+        "kernel_present": (artifact_dir / "vmlinuz").exists(),
+        "entry_flow_included": "Velyx Entry" in manifest.get("included_components", []),
+        "installer_included": "Velyx Installer" in manifest.get("included_components", []),
+        "first_boot_included": "Velyx First Boot" in manifest.get("included_components", []),
+        "assistant_included": "Assistant" in manifest.get("included_components", []),
+        "dev_mode_included": "Dev Mode" in manifest.get("included_components", []),
+        "source_bundle_present": Path(manifest.get("source_bundle", "")).exists(),
+        "vm_profile_present": (artifact_dir / "velyx-vm-profile.json").exists(),
+    }
+    status = "ok" if all(checks.values()) else "degraded"
+    return {
+        "status": status,
+        "artifact_dir": str(artifact_dir),
+        "checks": checks,
+        "next_steps": [
+            "Create a new VM with the profile requirements.",
+            "Boot the image.",
+            "Install Velyx through Velyx Entry.",
+            "Validate shell, assistant, model runtime, update, Control Center, and Dev Mode inside the VM.",
+        ],
+        "in_vm_validation": [
+            "velyx-status",
+            "velyx-version",
+            "velyx-vm-profile validate",
+            "velyx-logs.sh",
+            "journalctl --user -b",
+        ],
+    }
+
+
+def print_json(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="velyx-release-preview")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    subparsers.add_parser("manifest")
+
+    host_check_parser = subparsers.add_parser("host-check")
+    host_check_parser.add_argument("--format", choices=["raw", "qcow2", "both"], default="raw")
+
+    build_parser = subparsers.add_parser("build")
+    build_parser.add_argument("--format", choices=["raw", "qcow2", "both"], default="raw")
+    build_parser.add_argument("--output-dir", default="")
+
+    validate_parser = subparsers.add_parser("validate")
+    validate_parser.add_argument("artifact_dir")
+
+    args = parser.parse_args()
+
+    try:
+        if args.command == "manifest":
+            identity = build_identity()
+            payload = {
+                "identity": identity,
+                "release_profile": load_json(RELEASE_PROFILE_PATH),
+                "vm_profile": load_json(VM_PROFILE_PATH),
+            }
+            print_json(payload)
+            return 0
+
+        if args.command == "host-check":
+            payload = host_check(args.format)
+            print_json(payload)
+            return 0 if payload.get("status") == "ok" else 1
+
+        if args.command == "build":
+            output_dir = Path(args.output_dir) if args.output_dir else None
+            payload = build_artifact(args.format, output_dir)
+            print_json(payload)
+            return 0
+
+        if args.command == "validate":
+            payload = validate_artifact(Path(args.artifact_dir))
+            print_json(payload)
+            return 0 if payload.get("status") == "ok" else 1
+    except Exception as exc:
+        print_json({"status": "failed", "error": str(exc)})
+        return 1
+
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

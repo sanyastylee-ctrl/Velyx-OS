@@ -1,0 +1,44 @@
+{
+  "target_id": "velyx-os-preview",
+  "display_name": "Velyx OS Preview",
+  "channel": "preview",
+  "artifact_formats": [
+    "raw",
+    "qcow2"
+  ],
+  "default_format": "raw",
+  "host_requirements": {
+    "required_tools": [
+      "bash",
+      "truncate",
+      "mkfs.ext4",
+      "tar"
+    ],
+    "optional_tools": [
+      "qemu-img",
+      "qemu-system-x86_64"
+    ],
+    "required_env": [
+      "VELYX_BASE_ROOTFS",
+      "VELYX_BIN_DIR or binaries in target/release",
+      "VELYX_SHELL_BINARY or velyx-shell in target/release"
+    ]
+  },
+  "included_components": [
+    "runtime services",
+    "Velyx Shell",
+    "Velyx Entry",
+    "Velyx Installer",
+    "Velyx First Boot",
+    "Control Center",
+    "Assistant",
+    "Model runtime helpers",
+    "Dev Mode",
+    "Update and Recovery"
+  ],
+  "build_command": "./scripts/velyx-release-preview build --format both",
+  "validation_commands": [
+    "./scripts/velyx-release-preview validate <artifact_dir>",
+    "velyx-vm-profile validate"
+  ]
+}
