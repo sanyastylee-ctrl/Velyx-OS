@@ -71,6 +71,9 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString assistantPendingSummary READ assistantPendingSummary NOTIFY assistantStateChanged)
     Q_PROPERTY(QString assistantPendingDetails READ assistantPendingDetails NOTIFY assistantStateChanged)
     Q_PROPERTY(QVariantList assistantHistory READ assistantHistory NOTIFY assistantStateChanged)
+    Q_PROPERTY(bool devModeEnabled READ devModeEnabled NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devOverlayPath READ devOverlayPath NOTIFY devModeStateChanged)
+    Q_PROPERTY(QString devLastChange READ devLastChange NOTIFY devModeStateChanged)
     Q_PROPERTY(bool firstBootRequired READ firstBootRequired NOTIFY firstBootStateChanged)
     Q_PROPERTY(QString firstBootStep READ firstBootStep NOTIFY firstBootStateChanged)
     Q_PROPERTY(QString firstBootVersion READ firstBootVersion NOTIFY firstBootStateChanged)
@@ -98,6 +101,7 @@ public:
     Q_INVOKABLE void refreshAgentState();
     Q_INVOKABLE void refreshAiState();
     Q_INVOKABLE void refreshAssistantState();
+    Q_INVOKABLE void refreshDevModeState();
     Q_INVOKABLE void refreshFirstBootState();
     Q_INVOKABLE void refreshRuntimeStatus();
     Q_INVOKABLE void selectApp(const QString &appId);
@@ -144,6 +148,10 @@ public:
     Q_INVOKABLE void approveAssistant(const QString &requestId);
     Q_INVOKABLE void denyAssistant(const QString &requestId);
     Q_INVOKABLE void setAssistantMode(const QString &mode);
+    Q_INVOKABLE void enableDevMode();
+    Q_INVOKABLE void disableDevMode();
+    Q_INVOKABLE void rollbackDevMode();
+    Q_INVOKABLE void restartShellDev();
     void setInputControlMode(const QString &mode, const QString &details);
 
     QVariantList apps() const;
@@ -207,6 +215,9 @@ public:
     QString assistantPendingSummary() const;
     QString assistantPendingDetails() const;
     QVariantList assistantHistory() const;
+    bool devModeEnabled() const;
+    QString devOverlayPath() const;
+    QString devLastChange() const;
     bool firstBootRequired() const;
     QString firstBootStep() const;
     QString firstBootVersion() const;
@@ -245,6 +256,7 @@ signals:
     void agentStateChanged();
     void aiStateChanged();
     void assistantStateChanged();
+    void devModeStateChanged();
     void firstBootStateChanged();
 
 private:
@@ -335,6 +347,9 @@ private:
     QString m_assistantPendingSummary;
     QString m_assistantPendingDetails;
     QVariantList m_assistantHistory;
+    bool m_devModeEnabled {false};
+    QString m_devOverlayPath;
+    QString m_devLastChange;
     bool m_firstBootRequired {false};
     QString m_firstBootStep {"welcome"};
     QString m_firstBootVersion;

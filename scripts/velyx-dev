@@ -1,0 +1,582 @@
+#!/usr/bin/env python3
+import difflib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict[str, str]:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV = load_env_file()
+ROOT_DIR = Path(__file__).resolve().parent.parent
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+DEV_MODE_FILE = STATE_DIR / "dev_mode.json"
+DEV_LOG = STATE_DIR / "dev_mode.log"
+OVERLAY_ROOT = STATE_DIR / "dev_overlay"
+OVERLAY_HISTORY = STATE_DIR / "dev_overlay_history"
+OVERLAY_SNAPSHOTS = STATE_DIR / "dev_overlay_snapshots"
+BASE_SHELL_QML = ROOT_DIR / "apps" / "shell" / "qml"
+BASE_SHELL_SRC = ROOT_DIR / "apps" / "shell" / "src"
+BASE_THEME = ROOT_DIR / "packages" / "design-system" / "qml" / "Velyx" / "DesignSystem" / "Theme.qml"
+ALLOWED_ROOTS = {
+    "apps/shell/qml": BASE_SHELL_QML,
+    "apps/shell/src": BASE_SHELL_SRC,
+    "packages/design-system/qml/Velyx/DesignSystem/Theme.qml": BASE_THEME,
+}
+MAX_HISTORY = 12
+
+
+class DevModeError(RuntimeError):
+    pass
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def print_json(payload: Any) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with DEV_LOG.open("a", encoding="utf-8") as handle:
+        handle.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def default_state() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "overlay_root": str(OVERLAY_ROOT),
+        "source_root": str(ROOT_DIR),
+        "allowed_roots": list(ALLOWED_ROOTS.keys()),
+        "last_change_id": "",
+        "last_change_summary": "",
+        "last_change_files": [],
+        "history": [],
+        "updated_at": now_iso(),
+    }
+
+
+def ensure_state() -> dict[str, Any]:
+    state = read_json(DEV_MODE_FILE, {})
+    defaults = default_state()
+    changed = False
+    for key, value in defaults.items():
+        if key not in state:
+            state[key] = value
+            changed = True
+    if changed or not DEV_MODE_FILE.exists():
+        write_json(DEV_MODE_FILE, state)
+    return state
+
+
+def save_state(state: dict[str, Any]) -> None:
+    state["updated_at"] = now_iso()
+    write_json(DEV_MODE_FILE, state)
+
+
+def relative_target(path_text: str) -> str:
+    candidate = Path(path_text)
+    normalized = candidate.as_posix().lstrip("/")
+    if normalized in ALLOWED_ROOTS:
+        return normalized
+    if normalized.startswith("apps/shell/qml/"):
+        return normalized
+    if normalized.startswith("apps/shell/src/"):
+        return normalized
+    if normalized == "packages/design-system/qml/Velyx/DesignSystem/Theme.qml":
+        return normalized
+    raise DevModeError(f"Path is outside dev mode scope: {path_text}")
+
+
+def base_path_for(relative_path: str) -> Path:
+    normalized = relative_target(relative_path)
+    return ROOT_DIR / Path(normalized)
+
+
+def overlay_path_for(relative_path: str) -> Path:
+    normalized = relative_target(relative_path)
+    return OVERLAY_ROOT / Path(normalized)
+
+
+def seed_overlay() -> None:
+    (OVERLAY_ROOT / "apps" / "shell" / "qml").mkdir(parents=True, exist_ok=True)
+    for source in BASE_SHELL_QML.glob("*.qml"):
+        target = OVERLAY_ROOT / "apps" / "shell" / "qml" / source.name
+        if not target.exists():
+            shutil.copy2(source, target)
+    theme_target = OVERLAY_ROOT / "packages" / "design-system" / "qml" / "Velyx" / "DesignSystem" / "Theme.qml"
+    theme_target.parent.mkdir(parents=True, exist_ok=True)
+    if BASE_THEME.exists() and not theme_target.exists():
+        shutil.copy2(BASE_THEME, theme_target)
+
+
+def enable_dev_mode() -> dict[str, Any]:
+    seed_overlay()
+    state = ensure_state()
+    state["enabled"] = True
+    save_state(state)
+    log_event("dev_mode_enabled", "ok", f"overlay={OVERLAY_ROOT}")
+    return {
+        "enabled": True,
+        "overlay_root": str(OVERLAY_ROOT),
+        "summary": "Dev Mode enabled. Shell will prefer the live overlay on restart.",
+    }
+
+
+def disable_dev_mode() -> dict[str, Any]:
+    state = ensure_state()
+    state["enabled"] = False
+    save_state(state)
+    log_event("dev_mode_disabled", "ok")
+    return {
+        "enabled": False,
+        "overlay_root": str(OVERLAY_ROOT),
+        "summary": "Dev Mode disabled. Shell will load the installed UI again on next restart.",
+    }
+
+
+def status() -> dict[str, Any]:
+    state = ensure_state()
+    return {
+        "enabled": bool(state.get("enabled", False)),
+        "overlay_root": str(OVERLAY_ROOT),
+        "history_entries": len(state.get("history", [])),
+        "last_change_id": state.get("last_change_id", ""),
+        "last_change_summary": state.get("last_change_summary", ""),
+        "last_change_files": state.get("last_change_files", []),
+    }
+
+
+def list_ui_files(scope: str = "all") -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    scopes = {
+        "qml": ["apps/shell/qml"],
+        "src": ["apps/shell/src"],
+        "design": ["packages/design-system/qml/Velyx/DesignSystem/Theme.qml"],
+        "all": list(ALLOWED_ROOTS.keys()),
+    }
+    targets = scopes.get(scope, scopes["all"])
+    for relative in targets:
+        base = base_path_for(relative)
+        if base.is_file():
+            entries.append({"path": relative, "kind": "file"})
+            continue
+        for file_path in sorted(base.rglob("*")):
+            if file_path.is_file():
+                entries.append({"path": str(file_path.relative_to(ROOT_DIR)).replace("\\", "/"), "kind": "file"})
+    return entries
+
+
+def read_ui_file(path_text: str) -> dict[str, Any]:
+    relative = relative_target(path_text)
+    overlay = overlay_path_for(relative)
+    base = base_path_for(relative)
+    path = overlay if overlay.exists() else base
+    if not path.exists():
+        raise DevModeError(f"UI file not found: {relative}")
+    return {
+        "path": relative,
+        "source": "overlay" if overlay.exists() else "base",
+        "content": path.read_text(encoding="utf-8"),
+    }
+
+
+def search_ui_component(query: str) -> list[dict[str, Any]]:
+    needle = query.strip().lower()
+    if not needle:
+        raise DevModeError("Missing component query")
+    results: list[dict[str, Any]] = []
+    for entry in list_ui_files("all"):
+        relative = entry["path"]
+        path = overlay_path_for(relative)
+        if not path.exists():
+            path = base_path_for(relative)
+        text = path.read_text(encoding="utf-8")
+        for line_number, line in enumerate(text.splitlines(), start=1):
+            if needle in line.lower():
+                results.append(
+                    {
+                        "path": relative,
+                        "line": line_number,
+                        "preview": line.strip(),
+                    }
+                )
+                if len(results) >= 20:
+                    return results
+    return results
+
+
+def create_snapshot(summary: str = "manual snapshot") -> dict[str, Any]:
+    state = ensure_state()
+    snapshot_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    destination = OVERLAY_SNAPSHOTS / snapshot_id
+    if OVERLAY_ROOT.exists():
+        shutil.copytree(OVERLAY_ROOT, destination, dirs_exist_ok=True)
+    else:
+        destination.mkdir(parents=True, exist_ok=True)
+    state["last_snapshot_id"] = snapshot_id
+    save_state(state)
+    log_event("dev_snapshot_created", "ok", f"id={snapshot_id} summary={summary}")
+    return {"snapshot_id": snapshot_id, "path": str(destination), "summary": summary}
+
+
+def ensure_enabled() -> dict[str, Any]:
+    state = ensure_state()
+    if not state.get("enabled", False):
+        raise DevModeError("Dev Mode is disabled. Run 'velyx-dev enable' first.")
+    seed_overlay()
+    return state
+
+
+def add_compact_button_markers(content: str) -> str:
+    if "// dev-mode compact-button" in content:
+        return content
+    pattern = re.compile(r"(?P<indent>\s*)Button\s*\{\n", re.MULTILINE)
+
+    def replacer(match: re.Match[str]) -> str:
+        indent = match.group("indent")
+        return (
+            f"{indent}Button {{\n"
+            f"{indent}    // dev-mode compact-button\n"
+            f"{indent}    implicitHeight: 34\n"
+            f"{indent}    padding: Theme.space2\n"
+        )
+
+    return pattern.sub(replacer, content)
+
+
+def insert_button_after(content: str, neighbor: str, label: str) -> str:
+    marker = f'text: "{neighbor}"'
+    new_button = (
+        '            Button {\n'
+        f'                text: "{label}"\n'
+        '                // dev-mode generated action\n'
+        '                onClicked: root.permissionClient.askAssistant("Summarize the current system state")\n'
+        '            }\n'
+    )
+    if label in content:
+        return content
+    lines = content.splitlines()
+    for index, line in enumerate(lines):
+        if marker in line:
+            insert_at = index + 1
+            while insert_at < len(lines) and lines[insert_at].strip() != "}":
+                insert_at += 1
+            if insert_at < len(lines):
+                lines.insert(insert_at + 1, new_button.rstrip("\n"))
+                return "\n".join(lines) + "\n"
+    flow_anchor = 'Button { text: "Create Note"; onClicked: root.permissionClient.askAssistant("Create a note in Documents as markdown") }'
+    if flow_anchor in content:
+        return content.replace(flow_anchor, flow_anchor + "\n" + new_button.rstrip("\n")) + "\n"
+    raise DevModeError("Could not find a suitable button row for insertion")
+
+
+def widen_right_rail(content: str) -> str:
+    if "Layout.preferredWidth: 430" in content:
+        return content
+    return content.replace("Layout.preferredWidth: 390", "Layout.preferredWidth: 430", 1)
+
+
+def build_changes(request: str) -> list[dict[str, Any]]:
+    lowered = request.lower()
+    changes: list[dict[str, Any]] = []
+    if any(token in lowered for token in ["кноп", "button"]) and any(token in lowered for token in ["мень", "small", "compact", "компакт"]):
+        relative = "apps/shell/qml/AssistantPanel.qml"
+        current = read_ui_file(relative)["content"]
+        updated = add_compact_button_markers(current)
+        changes.append(
+            {
+                "path": relative,
+                "summary": "Made assistant action buttons more compact.",
+                "before": current,
+                "after": updated,
+            }
+        )
+        return changes
+
+    if any(token in lowered for token in ["панель", "panel"]) and any(token in lowered for token in ["вправ", "right", "шир", "wider"]):
+        relative = "apps/shell/qml/Main.qml"
+        current = read_ui_file(relative)["content"]
+        updated = widen_right_rail(current)
+        changes.append(
+            {
+                "path": relative,
+                "summary": "Shifted emphasis to the right rail by widening it.",
+                "before": current,
+                "after": updated,
+            }
+        )
+        return changes
+
+    if any(token in lowered for token in ["добав", "add"]) and any(token in lowered for token in ["кноп", "button"]):
+        relative = "apps/shell/qml/AssistantPanel.qml"
+        current = read_ui_file(relative)["content"]
+        match = re.search(r'["“](.+?)["”]', request)
+        label = match.group(1).strip() if match else "Quick action"
+        neighbor = "Create Note"
+        if "browser" in lowered or "брауз" in lowered:
+            neighbor = "Open Browser"
+        elif "development" in lowered or "dev" in lowered:
+            neighbor = "Development"
+        updated = insert_button_after(current, neighbor, label)
+        changes.append(
+            {
+                "path": relative,
+                "summary": f'Added a new quick action button "{label}".',
+                "before": current,
+                "after": updated,
+            }
+        )
+        return changes
+
+    raise DevModeError(
+        "UI request is outside the current dev-mode skill set. Supported examples: compact buttons, move panel right, add a quick action button."
+    )
+
+
+def unified_diff(relative: str, before: str, after: str) -> str:
+    diff = difflib.unified_diff(
+        before.splitlines(),
+        after.splitlines(),
+        fromfile=f"before/{relative}",
+        tofile=f"after/{relative}",
+        lineterm="",
+    )
+    return "\n".join(diff)
+
+
+def preview_request(request: str) -> dict[str, Any]:
+    ensure_enabled()
+    changes = build_changes(request)
+    previews = []
+    for change in changes:
+        previews.append(
+            {
+                "path": change["path"],
+                "summary": change["summary"],
+                "diff": unified_diff(change["path"], change["before"], change["after"]),
+            }
+        )
+    log_event("dev_preview_generated", "ok", f"request={request}")
+    return {
+        "status": "preview",
+        "summary": f"Prepared {len(previews)} UI change(s).",
+        "request": request,
+        "changes": previews,
+    }
+
+
+def apply_request(request: str) -> dict[str, Any]:
+    state = ensure_enabled()
+    changes = build_changes(request)
+    change_id = f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:6]}"
+    backups_root = OVERLAY_HISTORY / change_id
+    applied_files: list[str] = []
+    for change in changes:
+        relative = change["path"]
+        overlay = overlay_path_for(relative)
+        overlay.parent.mkdir(parents=True, exist_ok=True)
+        current = change["before"]
+        backup = backups_root / relative
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_text(current, encoding="utf-8")
+        overlay.write_text(change["after"], encoding="utf-8")
+        applied_files.append(relative)
+    history = list(state.get("history", []))
+    history.append(
+        {
+            "change_id": change_id,
+            "summary": "; ".join(change["summary"] for change in changes),
+            "files": applied_files,
+            "backup_root": str(backups_root),
+            "timestamp": now_iso(),
+        }
+    )
+    history = history[-MAX_HISTORY:]
+    state["history"] = history
+    state["last_change_id"] = change_id
+    state["last_change_summary"] = "; ".join(change["summary"] for change in changes)
+    state["last_change_files"] = applied_files
+    save_state(state)
+    log_event("dev_patch_applied", "ok", f"id={change_id} files={','.join(applied_files)}")
+    return {
+        "status": "ok",
+        "change_id": change_id,
+        "summary": state["last_change_summary"],
+        "files": applied_files,
+    }
+
+
+def restart_shell_dev() -> dict[str, Any]:
+    commands = [
+        ["systemctl", "--user", "restart", "velyx-shell.service"],
+        ["velyx-restart.sh"],
+    ]
+    for command in commands:
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=20)
+        except Exception:
+            continue
+        if result.returncode == 0:
+            log_event("dev_shell_restarted", "ok", f"command={' '.join(command)}")
+            return {
+                "status": "ok",
+                "summary": "Velyx Shell restart requested for live UI reload.",
+                "details": result.stdout.strip() or "Restart command completed.",
+            }
+    log_event("dev_shell_restarted", "degraded", "restart command unavailable")
+    return {
+        "status": "degraded",
+        "summary": "UI files changed, but shell restart was not available in this environment.",
+        "details": "Run 'systemctl --user restart velyx-shell.service' on a Velyx session host.",
+    }
+
+
+def rollback_last_change() -> dict[str, Any]:
+    state = ensure_enabled()
+    history = list(state.get("history", []))
+    if not history:
+        raise DevModeError("No dev overlay changes available for rollback")
+    entry = history.pop()
+    backups_root = Path(entry["backup_root"])
+    restored: list[str] = []
+    for relative in entry.get("files", []):
+        backup = backups_root / relative
+        if not backup.exists():
+            continue
+        target = overlay_path_for(relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(backup, target)
+        restored.append(relative)
+    state["history"] = history
+    if history:
+        state["last_change_id"] = history[-1]["change_id"]
+        state["last_change_summary"] = history[-1]["summary"]
+        state["last_change_files"] = history[-1]["files"]
+    else:
+        state["last_change_id"] = ""
+        state["last_change_summary"] = ""
+        state["last_change_files"] = []
+    save_state(state)
+    log_event("dev_rollback", "ok", f"id={entry.get('change_id', '')} files={','.join(restored)}")
+    restart = restart_shell_dev()
+    return {
+        "status": restart["status"],
+        "summary": f"Rolled back {entry.get('change_id', 'last change')}.",
+        "files": restored,
+        "restart": restart,
+    }
+
+
+def usage() -> str:
+    return "\n".join(
+        [
+            "Usage:",
+            "  velyx-dev enable",
+            "  velyx-dev disable",
+            "  velyx-dev status",
+            "  velyx-dev list-ui-files [all|qml|src|design]",
+            "  velyx-dev search-ui-component <query>",
+            "  velyx-dev read-ui-file <path>",
+            "  velyx-dev snapshot-ui-state",
+            '  velyx-dev preview-ui-diff "<request>"',
+            '  velyx-dev patch-ui-file "<request>"',
+            "  velyx-dev restart-shell-dev",
+            "  velyx-dev rollback",
+        ]
+    )
+
+
+def main(argv: list[str]) -> int:
+    ensure_state()
+    if len(argv) < 2:
+        print(usage(), file=sys.stderr)
+        return 1
+    command = argv[1]
+    try:
+        if command == "enable":
+            print_json(enable_dev_mode())
+            return 0
+        if command == "disable":
+            print_json(disable_dev_mode())
+            return 0
+        if command == "status":
+            print_json(status())
+            return 0
+        if command == "list-ui-files":
+            scope = argv[2] if len(argv) > 2 else "all"
+            print_json({"files": list_ui_files(scope)})
+            return 0
+        if command == "search-ui-component":
+            if len(argv) < 3:
+                raise DevModeError("Missing component query")
+            print_json({"results": search_ui_component(" ".join(argv[2:]))})
+            return 0
+        if command == "read-ui-file":
+            if len(argv) < 3:
+                raise DevModeError("Missing UI file path")
+            print_json(read_ui_file(argv[2]))
+            return 0
+        if command == "snapshot-ui-state":
+            print_json(create_snapshot())
+            return 0
+        if command == "preview-ui-diff":
+            if len(argv) < 3:
+                raise DevModeError("Missing UI change request")
+            print_json(preview_request(" ".join(argv[2:])))
+            return 0
+        if command == "patch-ui-file":
+            if len(argv) < 3:
+                raise DevModeError("Missing UI change request")
+            print_json(apply_request(" ".join(argv[2:])))
+            return 0
+        if command == "restart-shell-dev":
+            print_json(restart_shell_dev())
+            return 0
+        if command == "rollback":
+            print_json(rollback_last_change())
+            return 0
+        print(usage(), file=sys.stderr)
+        return 1
+    except Exception as exc:
+        log_event("dev_command_failed", "failed", str(exc))
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))

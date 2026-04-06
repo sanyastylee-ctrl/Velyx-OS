@@ -343,6 +343,14 @@ class ToolRegistry:
             ("list_intents", "List intents", "productivity", "List intents", [], "never"),
             ("list_rules", "List rules", "productivity", "List automation rules", [], "never"),
             ("show_recovery_status", "Recovery status", "productivity", "Show recovery status", [], "never"),
+            ("list_ui_files", "List UI files", "dev", "List editable shell UI files", [], "never"),
+            ("search_ui_component", "Search UI component", "dev", "Search within the live UI scope", [], "never"),
+            ("read_ui_file", "Read UI file", "dev", "Read an editable UI file", [], "never"),
+            ("preview_ui_diff", "Preview UI diff", "dev", "Preview a live UI change", [], "never"),
+            ("patch_ui_file", "Patch UI file", "dev", "Apply a live UI change in the overlay", [], "ask_once"),
+            ("restart_shell_dev", "Restart shell", "dev", "Reload the shell after a live UI change", [], "never"),
+            ("rollback_last_ui_change", "Rollback UI change", "dev", "Rollback the latest live UI change", [], "ask_once"),
+            ("snapshot_ui_state", "Snapshot UI state", "dev", "Capture the current overlay state", [], "never"),
         ]
         for tool_id, display_name, category, description, permissions, confirmation in entries:
             self.register(
@@ -371,14 +379,17 @@ class ToolDispatcher:
 
     def _run(self, program: str, arguments: list[str], timeout: int = 20) -> subprocess.CompletedProcess[str]:
         resolved_program = shutil.which(program)
+        command: list[str]
         if resolved_program is None:
             local_script = Path(__file__).resolve().parent / program
             if local_script.exists():
-                resolved_program = str(local_script)
+                command = [sys.executable, str(local_script), *arguments]
             else:
-                resolved_program = program
+                command = [program, *arguments]
+        else:
+            command = [resolved_program, *arguments]
         return subprocess.run(
-            [resolved_program, *arguments],
+            command,
             check=False,
             capture_output=True,
             text=True,
@@ -590,6 +601,68 @@ class ToolDispatcher:
         if tool_id == "show_recovery_status":
             update = read_json(UPDATE_STATE, {})
             return {"summary": "Recovery needed." if update.get("recovery_needed") else "Recovery is not currently required.", "details": json.dumps(update, ensure_ascii=False)}
+        if tool_id == "list_ui_files":
+            scope = payload.get("scope", "all")
+            result = self._run("velyx-dev", ["list-ui-files", scope], timeout=15)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to list UI files")
+            data = json.loads(result.stdout or "{}")
+            files = [entry.get("path", "") for entry in data.get("files", [])]
+            return {"summary": "\n".join(files[:20]) if files else "No editable UI files found.", "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "search_ui_component":
+            result = self._run("velyx-dev", ["search-ui-component", payload["query"]], timeout=15)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to search UI components")
+            data = json.loads(result.stdout or "{}")
+            rows = [f"{entry.get('path')}:{entry.get('line')} {entry.get('preview')}" for entry in data.get("results", [])[:12]]
+            return {"summary": "\n".join(rows) if rows else "No matching UI component found.", "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "read_ui_file":
+            result = self._run("velyx-dev", ["read-ui-file", payload["path"]], timeout=15)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to read UI file")
+            data = json.loads(result.stdout or "{}")
+            return {"summary": truncate(data.get("content", ""), 700), "details": f"{data.get('path', '')} ({data.get('source', 'base')})"}
+        if tool_id == "snapshot_ui_state":
+            result = self._run("velyx-dev", ["snapshot-ui-state"], timeout=20)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to snapshot UI state")
+            data = json.loads(result.stdout or "{}")
+            return {"summary": data.get("summary", "UI snapshot created."), "details": json.dumps(data, ensure_ascii=False)}
+        if tool_id == "preview_ui_diff":
+            result = self._run("velyx-dev", ["preview-ui-diff", payload["request"]], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to preview the UI diff")
+            data = json.loads(result.stdout or "{}")
+            preview_lines = []
+            for change in data.get("changes", [])[:3]:
+                preview_lines.append(f"{change.get('path')}: {change.get('summary')}")
+            return {
+                "summary": data.get("summary", "Preview generated."),
+                "details": "\n".join(preview_lines) if preview_lines else json.dumps(data, ensure_ascii=False),
+                "artifacts": [{"type": "ui_preview", "value": data.get("changes", [])}],
+            }
+        if tool_id == "patch_ui_file":
+            result = self._run("velyx-dev", ["patch-ui-file", payload["request"]], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to apply the UI patch")
+            data = json.loads(result.stdout or "{}")
+            return {
+                "summary": data.get("summary", "Live UI change applied."),
+                "details": json.dumps(data, ensure_ascii=False),
+                "artifacts": [{"type": "ui_change", "value": data.get("files", [])}],
+            }
+        if tool_id == "restart_shell_dev":
+            result = self._run("velyx-dev", ["restart-shell-dev"], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to restart the shell")
+            data = json.loads(result.stdout or "{}")
+            return {"summary": data.get("summary", "Shell reload requested."), "details": data.get("details", "")}
+        if tool_id == "rollback_last_ui_change":
+            result = self._run("velyx-dev", ["rollback"], timeout=25)
+            if result.returncode != 0:
+                raise AssistantError(result.stderr.strip() or "Failed to roll back the live UI change")
+            data = json.loads(result.stdout or "{}")
+            return {"summary": data.get("summary", "Last UI change rolled back."), "details": json.dumps(data, ensure_ascii=False)}
         raise AssistantError(f"Unsupported tool: {tool_id}")
 
 
@@ -608,6 +681,7 @@ class RequestParser:
             "wants_safe_web": "safe web" in lowered or "safe-web" in lowered or "безопасн" in lowered,
             "wants_recovery": "recovery" in lowered or "восстанов" in lowered,
             "wants_update": "update" in lowered or "обнов" in lowered,
+            "wants_ui_edit": any(token in lowered for token in ["кноп", "button", "panel", "панель", "spacing", "spacing", "compact ui", "ui layout", "qml"]),
         }
 
 
@@ -660,6 +734,13 @@ class PlanBuilder:
         lowered = parsed["lowered"]
         steps: list[PlanStep] = []
         summary = "Request prepared."
+
+        if parsed["wants_ui_edit"]:
+            steps.append(PlanStep("snapshot_ui_state", {}, "Capture the current live UI overlay"))
+            steps.append(PlanStep("preview_ui_diff", {"request": query}, "Preview the live UI change"))
+            steps.append(PlanStep("patch_ui_file", {"request": query}, "Apply the live UI change"))
+            steps.append(PlanStep("restart_shell_dev", {}, "Reload the shell to show the UI change"))
+            return steps, "Preparing a live shell UI update."
 
         if parsed["wants_switch_dev"]:
             steps.append(PlanStep("activate_space", {"space_id": "development"}, "Move into development context"))
@@ -729,6 +810,8 @@ class PlanBuilder:
 
     def classify_task_type(self, query: str, steps: list[PlanStep]) -> str:
         lowered = query.lower()
+        if any(step.tool_id in {"preview_ui_diff", "patch_ui_file", "restart_shell_dev"} for step in steps):
+            return "general_assistant"
         if any(token in lowered for token in ["compare", "сравни", "architecture", "архитект", "strategy", "стратег", "plan", "спланир", "design", "продумай"]):
             return "heavy_reasoning"
         if any(step.tool_id in {"web_search", "fetch_url", "github_search", "docs_lookup", "release_notes_lookup", "webpage_summary"} for step in steps):
@@ -854,10 +937,11 @@ class AssistantBackend:
         self._save()
         return result
 
-    def _execute_steps(self, query: str, steps: list[PlanStep]) -> dict:
+    def _execute_steps(self, query: str, steps: list[PlanStep], approved_step_ids: Optional[set[int]] = None) -> dict:
         step_results: list[dict] = []
+        approved_step_ids = approved_step_ids or set()
         for index, step in enumerate(steps):
-            if self._requires_approval(step.tool_id, step.payload):
+            if index not in approved_step_ids and self._requires_approval(step.tool_id, step.payload):
                 return self._store_pending(
                     query,
                     steps[index:],
@@ -954,7 +1038,7 @@ class AssistantBackend:
         self.state["current_execution_status"] = "running"
         feedback("approval_allowed", {"request_id": request_id})
         log_event("assistant_approval_allowed", "ok", f"request_id={request_id}")
-        return self._execute_steps(query, steps)
+        return self._execute_steps(query, steps, approved_step_ids={0})
 
     def deny(self, request_id: str) -> dict:
         pending = self.state.get("pending_approval", {})

@@ -384,6 +384,21 @@ QVariantList PermissionClient::assistantHistory() const
     return m_assistantHistory;
 }
 
+bool PermissionClient::devModeEnabled() const
+{
+    return m_devModeEnabled;
+}
+
+QString PermissionClient::devOverlayPath() const
+{
+    return m_devOverlayPath;
+}
+
+QString PermissionClient::devLastChange() const
+{
+    return m_devLastChange;
+}
+
 bool PermissionClient::firstBootRequired() const
 {
     return m_firstBootRequired;
@@ -484,6 +499,7 @@ void PermissionClient::refreshApps()
     refreshAgentState();
     refreshAiState();
     refreshAssistantState();
+    refreshDevModeState();
     refreshFirstBootState();
 
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
@@ -958,6 +974,43 @@ void PermissionClient::refreshAssistantState()
 
     if (changed) {
         emit assistantStateChanged();
+    }
+}
+
+void PermissionClient::refreshDevModeState()
+{
+    const QString statePath = QDir::home().filePath(".velyx/dev_mode.json");
+
+    bool enabled = false;
+    QString overlayPath;
+    QString lastChange;
+
+    QFile stateFile(statePath);
+    if (stateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            enabled = object.value("enabled").toBool(false);
+            overlayPath = object.value("overlay_root").toString();
+            lastChange = object.value("last_change_summary").toString();
+        }
+    }
+
+    bool changed = false;
+    if (m_devModeEnabled != enabled) {
+        m_devModeEnabled = enabled;
+        changed = true;
+    }
+    if (m_devOverlayPath != overlayPath) {
+        m_devOverlayPath = overlayPath;
+        changed = true;
+    }
+    if (m_devLastChange != lastChange) {
+        m_devLastChange = lastChange;
+        changed = true;
+    }
+    if (changed) {
+        emit devModeStateChanged();
     }
 }
 
@@ -2028,6 +2081,93 @@ void PermissionClient::setAssistantMode(const QString &mode)
 
     updateLaunchState("error", "Assistant mode control unavailable");
     updateStatusDetails("assistant_mode", "failed", trimmed, "retry");
+}
+
+void PermissionClient::enableDevMode()
+{
+    QProcess process;
+    process.start("velyx-dev", {"enable"});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshDevModeState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Dev Mode enabled" : output);
+            updateStatusDetails("dev_mode_enable", "ok", "dev_mode", "restart_shell");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Failed to enable Dev Mode" : errorOutput);
+        updateStatusDetails("dev_mode_enable", "failed", "dev_mode", "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Dev Mode control unavailable");
+    updateStatusDetails("dev_mode_enable", "failed", "dev_mode", "retry");
+}
+
+void PermissionClient::disableDevMode()
+{
+    QProcess process;
+    process.start("velyx-dev", {"disable"});
+    if (process.waitForStarted(400) && process.waitForFinished(5000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshDevModeState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Dev Mode disabled" : output);
+            updateStatusDetails("dev_mode_disable", "ok", "dev_mode", "observe_shell");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Failed to disable Dev Mode" : errorOutput);
+        updateStatusDetails("dev_mode_disable", "failed", "dev_mode", "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Dev Mode control unavailable");
+    updateStatusDetails("dev_mode_disable", "failed", "dev_mode", "retry");
+}
+
+void PermissionClient::rollbackDevMode()
+{
+    QProcess process;
+    process.start("velyx-dev", {"rollback"});
+    if (process.waitForStarted(400) && process.waitForFinished(15000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshDevModeState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Dev overlay rolled back" : output);
+            updateStatusDetails("dev_mode_rollback", "ok", "dev_overlay", "observe_shell");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Failed to roll back dev overlay" : errorOutput);
+        updateStatusDetails("dev_mode_rollback", "failed", "dev_overlay", "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Dev rollback unavailable");
+    updateStatusDetails("dev_mode_rollback", "failed", "dev_overlay", "retry");
+}
+
+void PermissionClient::restartShellDev()
+{
+    QProcess process;
+    process.start("velyx-dev", {"restart-shell-dev"});
+    if (process.waitForStarted(400) && process.waitForFinished(15000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Shell restart requested" : output);
+            updateStatusDetails("dev_mode_restart_shell", "ok", "dev_overlay", "observe_shell");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Failed to restart shell" : errorOutput);
+        updateStatusDetails("dev_mode_restart_shell", "failed", "dev_overlay", "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Shell dev restart unavailable");
+    updateStatusDetails("dev_mode_restart_shell", "failed", "dev_overlay", "retry");
 }
 
 void PermissionClient::launchSelectedApp()

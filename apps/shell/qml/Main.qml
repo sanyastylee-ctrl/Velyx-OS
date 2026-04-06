@@ -48,6 +48,7 @@ ApplicationWindow {
         permissionClient.refreshAgentState()
         permissionClient.refreshAiState()
         permissionClient.refreshAssistantState()
+        permissionClient.refreshDevModeState()
         permissionClient.refreshFirstBootState()
         permissionClient.refreshOpenApps()
         permissionClient.refreshApps()
@@ -137,6 +138,7 @@ ApplicationWindow {
             permissionClient.refreshAgentState()
             permissionClient.refreshAiState()
             permissionClient.refreshAssistantState()
+            permissionClient.refreshDevModeState()
             permissionClient.refreshFirstBootState()
             permissionClient.refreshOpenApps()
             permissionClient.refreshSelectedAppRuntime()
@@ -271,6 +273,14 @@ ApplicationWindow {
                         tone: permissionClient.aiMode === "auto" ? "warning"
                             : (permissionClient.aiMode === "suggest" ? "accent" : "neutral")
                     }
+
+                    StatusChip {
+                        visible: permissionClient.devModeEnabled
+                        compact: true
+                        label: "Dev"
+                        value: "Overlay active"
+                        tone: "warning"
+                    }
                 }
             }
 
@@ -308,6 +318,7 @@ ApplicationWindow {
                                 permissionClient.refreshAgentState()
                                 permissionClient.refreshAiState()
                                 permissionClient.refreshAssistantState()
+                                permissionClient.refreshDevModeState()
                                 permissionClient.refreshOpenApps()
                                 permissionClient.refreshApps()
                             }
@@ -487,6 +498,12 @@ ApplicationWindow {
 
                     AssistantPanel {
                         Layout.fillWidth: true
+                        permissionClient: permissionClient
+                    }
+
+                    DevModePanel {
+                        Layout.fillWidth: true
+                        visible: permissionClient.devModeEnabled
                         permissionClient: permissionClient
                     }
 

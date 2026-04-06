@@ -83,7 +83,9 @@ Rectangle {
         TextField {
             id: assistantInput
             Layout.fillWidth: true
-            placeholderText: "Open the browser • Find the best Qt IDEs • Create a note in Documents"
+            placeholderText: root.permissionClient.devModeEnabled
+                ? "Make buttons smaller • Move the panel right • Add a button near Create Note"
+                : "Open the browser • Find the best Qt IDEs • Create a note in Documents"
             color: Theme.textPrimary
             placeholderTextColor: Theme.textMuted
             selectByMouse: true
@@ -103,6 +105,11 @@ Rectangle {
             Button { text: "Qt IDE Search"; onClicked: root.permissionClient.askAssistant("Find the best Qt IDEs on the internet") }
             Button { text: "Development"; onClicked: root.permissionClient.askAssistant("Switch me to development and open the browser") }
             Button { text: "Create Note"; onClicked: root.permissionClient.askAssistant("Create a note in Documents as markdown") }
+            Button {
+                visible: root.permissionClient.devModeEnabled
+                text: "Compact UI"
+                onClicked: root.permissionClient.askAssistant("Make the buttons smaller")
+            }
         }
 
         Rectangle {
