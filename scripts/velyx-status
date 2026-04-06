@@ -13,6 +13,8 @@ APP_REGISTRY="${VELYX_APP_REGISTRY:-${STATE_DIR}/apps_registry.json}"
 SPACES_REGISTRY="${VELYX_SPACES_REGISTRY:-${STATE_DIR}/spaces_registry.json}"
 INTENTS_REGISTRY="${VELYX_INTENTS_REGISTRY:-${STATE_DIR}/intents_registry.json}"
 INTENT_STATE="${STATE_DIR}/intent_state.json"
+RULES_REGISTRY="${VELYX_RULES_REGISTRY:-${STATE_DIR}/rules_registry.json}"
+RULES_STATE="${STATE_DIR}/rules_state.json"
 
 unit_state() {
   local unit="$1"
@@ -73,12 +75,21 @@ intents_count() {
   grep -o '"intent_id"' "${INTENTS_REGISTRY}" | wc -l | awk '{print $1}'
 }
 
-intent_state_string() {
-  local key="$1"
-  if [[ ! -f "${INTENT_STATE}" ]]; then
+rules_count() {
+  if [[ ! -f "${RULES_REGISTRY}" ]]; then
+    printf '0\n'
     return 0
   fi
-  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "${INTENT_STATE}" | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true
+  grep -o '"rule_id"' "${RULES_REGISTRY}" | wc -l | awk '{print $1}'
+}
+
+intent_state_string() {
+  local key="$1"
+  local file="${2:-$INTENT_STATE}"
+  if [[ ! -f "${file}" ]]; then
+    return 0
+  fi
+  grep -oE "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "${file}" | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true
 }
 
 active_space() {
@@ -105,6 +116,7 @@ printf 'recovery-needed: %s\n' "$(state_bool recovery_needed)"
 printf 'app-registry: %s (count=%s)\n' "${APP_REGISTRY}" "$(app_count)"
 printf 'spaces-registry: %s (count=%s active=%s)\n' "${SPACES_REGISTRY}" "$(spaces_count)" "$(active_space)"
 printf 'intents-registry: %s (count=%s last=%s result=%s)\n' "${INTENTS_REGISTRY}" "$(intents_count)" "$(intent_state_string last_intent_id)" "$(intent_state_string last_result)"
+printf 'rules-registry: %s (count=%s last=%s result=%s)\n' "${RULES_REGISTRY}" "$(rules_count)" "$(intent_state_string last_rule_id "${RULES_STATE}")" "$(intent_state_string last_result "${RULES_STATE}")"
 printf 'xprop: %s\n' "$(command -v xprop >/dev/null 2>&1 && echo available || echo missing)"
 printf 'wmctrl: %s\n' "$(command -v wmctrl >/dev/null 2>&1 && echo available || echo missing)"
 printf 'xdotool: %s\n' "$(command -v xdotool >/dev/null 2>&1 && echo available || echo missing)"

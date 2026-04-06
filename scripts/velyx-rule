@@ -1,0 +1,337 @@
+#!/usr/bin/env python3
+import json
+import os
+import shutil
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV_FILE_VALUES = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV_FILE_VALUES.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+RULES_REGISTRY = Path(
+    os.environ.get("VELYX_RULES_REGISTRY")
+    or ENV_FILE_VALUES.get("VELYX_RULES_REGISTRY")
+    or (STATE_DIR / "rules_registry.json")
+)
+RULES_STATE = STATE_DIR / "rules_state.json"
+RULES_LOG = STATE_DIR / "rules.log"
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with RULES_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def default_registry() -> dict:
+    timestamp = now_iso()
+    return {
+        "rules": [
+            {
+                "rule_id": "auto_run_general_after_session_ready",
+                "display_name": "Run General after session ready",
+                "description": "Automatically runs the general intent when the session becomes ready.",
+                "enabled": True,
+                "trigger_type": "session_ready",
+                "trigger_payload": {},
+                "conditions": [],
+                "action_type": "run_intent",
+                "action_payload": {"intent_id": "general_use"},
+                "cooldown_seconds": 10,
+                "last_triggered_at": "",
+                "source": "system",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            },
+            {
+                "rule_id": "go_recovery_on_update_failed",
+                "display_name": "Recovery on update failure",
+                "description": "Switches to recovery intent after an update failure.",
+                "enabled": True,
+                "trigger_type": "update_failed",
+                "trigger_payload": {},
+                "conditions": [],
+                "action_type": "run_intent",
+                "action_payload": {"intent_id": "recovery_mode"},
+                "cooldown_seconds": 30,
+                "last_triggered_at": "",
+                "source": "system",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            },
+            {
+                "rule_id": "go_recovery_on_recovery_needed",
+                "display_name": "Activate recovery space when recovery is needed",
+                "description": "Switches to recovery space when the update pipeline asks for recovery.",
+                "enabled": True,
+                "trigger_type": "recovery_needed",
+                "trigger_payload": {},
+                "conditions": [],
+                "action_type": "activate_space",
+                "action_payload": {"space_id": "recovery"},
+                "cooldown_seconds": 30,
+                "last_triggered_at": "",
+                "source": "system",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            },
+            {
+                "rule_id": "restart_required_app_if_crashed",
+                "display_name": "Restart required app after crash",
+                "description": "Restarts a required app in the active space after runtime failure.",
+                "enabled": True,
+                "trigger_type": "app_runtime_failed",
+                "trigger_payload": {},
+                "conditions": [{"field": "app_required", "equals": "true"}],
+                "action_type": "restart_app",
+                "action_payload": {},
+                "cooldown_seconds": 15,
+                "last_triggered_at": "",
+                "source": "system",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            },
+            {
+                "rule_id": "log_permission_denied",
+                "display_name": "Audit permission denied",
+                "description": "Adds an automation audit entry for denied permissions.",
+                "enabled": True,
+                "trigger_type": "permission_denied",
+                "trigger_payload": {},
+                "conditions": [],
+                "action_type": "write_audit",
+                "action_payload": {"message": "permission denied observed by rules engine"},
+                "cooldown_seconds": 5,
+                "last_triggered_at": "",
+                "source": "system",
+                "created_at": timestamp,
+                "updated_at": timestamp,
+            },
+        ]
+    }
+
+
+def default_state() -> dict:
+    return {
+        "last_rule_id": "",
+        "last_result": "none",
+        "last_trigger_type": "",
+        "last_action_type": "",
+        "last_run_at": "",
+        "last_message": "",
+        "last_seen_update_key": "",
+        "last_seen_recovery_needed": False,
+        "last_seen_intent_run_at": "",
+        "last_seen_permission_event": "",
+    }
+
+
+def ensure_registry_seeded(force: bool = False) -> dict:
+    if RULES_REGISTRY.exists() and not force:
+        try:
+            registry = json.loads(RULES_REGISTRY.read_text(encoding="utf-8"))
+            if registry.get("rules"):
+                return registry
+        except Exception:
+            pass
+    registry = default_registry()
+    save_json(RULES_REGISTRY, registry)
+    if not RULES_STATE.exists():
+        save_json(RULES_STATE, default_state())
+    log_event("rule_registry_seeded", "ok", f"count={len(registry['rules'])}")
+    return registry
+
+
+def load_registry() -> dict:
+    return ensure_registry_seeded(force=False)
+
+
+def load_state() -> dict:
+    if RULES_STATE.exists():
+        try:
+            return json.loads(RULES_STATE.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return default_state()
+
+
+def save_state(rule_id: str, result: str, trigger_type: str, action_type: str, message: str) -> None:
+    payload = load_state()
+    payload.update(
+        {
+            "last_rule_id": rule_id,
+            "last_result": result,
+            "last_trigger_type": trigger_type,
+            "last_action_type": action_type,
+            "last_run_at": now_iso(),
+            "last_message": message,
+        }
+    )
+    save_json(RULES_STATE, payload)
+
+
+def find_rule(registry: dict, rule_id: str):
+    for rule in registry.get("rules", []):
+        if rule.get("rule_id") == rule_id:
+            return rule
+    return None
+
+
+def try_busctl(*args: str) -> subprocess.CompletedProcess:
+    if shutil.which("busctl") is None:
+        raise RuntimeError("busctl_unavailable")
+    return subprocess.run(["busctl", "--user", *args], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+
+
+def run_action(rule: dict) -> tuple[str, str]:
+    action_type = rule.get("action_type", "")
+    payload = rule.get("action_payload", {})
+    if action_type == "run_intent":
+        tool = shutil.which("velyx-intent")
+        if not tool:
+            return "failed", "velyx-intent unavailable"
+        result = subprocess.run([tool, "run", payload.get("intent_id", "")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return ("ok", result.stdout.strip()) if result.returncode == 0 else ("failed", result.stderr.strip() or result.stdout.strip())
+    if action_type in {"activate_space", "ensure_space_active"}:
+        tool = shutil.which("velyx-space")
+        if not tool:
+            return "failed", "velyx-space unavailable"
+        result = subprocess.run([tool, "activate", payload.get("space_id", "")], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return ("ok", result.stdout.strip()) if result.returncode == 0 else ("failed", result.stderr.strip() or result.stdout.strip())
+    if action_type == "request_recovery_space":
+        tool = shutil.which("velyx-space")
+        if not tool:
+            return "failed", "velyx-space unavailable"
+        result = subprocess.run([tool, "activate", "recovery"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return ("ok", result.stdout.strip()) if result.returncode == 0 else ("failed", result.stderr.strip() or result.stdout.strip())
+    if action_type in {"restart_app", "launch_app", "stop_app"}:
+        app_id = payload.get("app_id", "")
+        if not app_id:
+            return "failed", "missing app_id"
+        if action_type == "restart_app":
+            method = "RestartApp"
+        elif action_type == "launch_app":
+            method = "Launch"
+        else:
+            method = "StopApp"
+        try:
+            result = try_busctl("call", "com.velyx.Launcher", "/com/velyx/Launcher", "com.velyx.Launcher1", method, "s", app_id)
+        except RuntimeError:
+            return "failed", "busctl unavailable"
+        return ("ok", result.stdout.strip()) if result.returncode == 0 else ("failed", result.stderr.strip())
+    if action_type in {"write_audit", "mark_alert"}:
+        return "ok", payload.get("message", "rule action recorded")
+    return "failed", f"unsupported action: {action_type}"
+
+
+def cmd_list() -> int:
+    registry = load_registry()
+    state = load_state()
+    for rule in registry.get("rules", []):
+        marker = "*" if rule.get("rule_id") == state.get("last_rule_id") else "-"
+        enabled = "enabled" if rule.get("enabled", True) else "disabled"
+        print(f"{marker}\t{rule.get('rule_id')}\t{enabled}\t{rule.get('trigger_type')}\t{rule.get('action_type')}")
+    return 0
+
+
+def cmd_info(rule_id: str) -> int:
+    registry = load_registry()
+    rule = find_rule(registry, rule_id)
+    if not rule:
+        print(f"rule not found: {rule_id}", file=sys.stderr)
+        return 1
+    print(json.dumps(rule, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_toggle(rule_id: str, enabled: bool) -> int:
+    registry = load_registry()
+    rule = find_rule(registry, rule_id)
+    if not rule:
+        print(f"rule not found: {rule_id}", file=sys.stderr)
+        return 1
+    rule["enabled"] = enabled
+    rule["updated_at"] = now_iso()
+    save_json(RULES_REGISTRY, registry)
+    log_event("rule_registry_updated", "ok", f"rule_id={rule_id} enabled={enabled}")
+    print(f"{rule_id}: {'enabled' if enabled else 'disabled'}")
+    return 0
+
+
+def cmd_run(rule_id: str) -> int:
+    registry = load_registry()
+    rule = find_rule(registry, rule_id)
+    if not rule:
+        log_event("rule_manual_run", "failed", f"rule_id={rule_id} reason=not_found")
+        print(f"rule not found: {rule_id}", file=sys.stderr)
+        return 1
+    log_event("rule_action_begin", "manual", f"rule_id={rule_id} action_type={rule.get('action_type')}")
+    result, message = run_action(rule)
+    save_state(rule_id, result, "manual", rule.get("action_type", ""), message)
+    rule["last_triggered_at"] = now_iso()
+    rule["updated_at"] = now_iso()
+    save_json(RULES_REGISTRY, registry)
+    log_event("rule_action_ok" if result == "ok" else "rule_action_failed", result, f"rule_id={rule_id} {message}")
+    print(f"{rule_id}: {result}")
+    if message:
+        print(message)
+    return 0 if result == "ok" else 1
+
+
+def usage() -> int:
+    print(
+        "usage: velyx-rule list | info <rule_id> | enable <rule_id> | disable <rule_id> | run <rule_id> | seed-defaults",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def main() -> int:
+    if len(sys.argv) < 2:
+        return usage()
+    command = sys.argv[1]
+    if command == "list":
+        return cmd_list()
+    if command == "info" and len(sys.argv) == 3:
+        return cmd_info(sys.argv[2])
+    if command == "enable" and len(sys.argv) == 3:
+        return cmd_toggle(sys.argv[2], True)
+    if command == "disable" and len(sys.argv) == 3:
+        return cmd_toggle(sys.argv[2], False)
+    if command == "run" and len(sys.argv) == 3:
+        return cmd_run(sys.argv[2])
+    if command == "seed-defaults":
+        ensure_registry_seeded(force=False)
+        print(f"rules registry ready: {RULES_REGISTRY}")
+        return 0
+    return usage()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

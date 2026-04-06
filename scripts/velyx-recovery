@@ -169,6 +169,9 @@ fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-intent" ]]; then
   "${PREFIX}/bin/velyx-intent" seed-defaults >/dev/null || true
 fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-rule" ]]; then
+  "${PREFIX}/bin/velyx-rule" seed-defaults >/dev/null || true
+fi
 
 if health_check; then
   CURRENT_VERSION="$(read_installed_version)"

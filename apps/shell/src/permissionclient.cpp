@@ -99,6 +99,11 @@ QVariantList PermissionClient::intents() const
     return m_intents;
 }
 
+QVariantList PermissionClient::rules() const
+{
+    return m_rules;
+}
+
 QVariantMap PermissionClient::selectedAppInfo() const
 {
     return m_selectedAppInfo;
@@ -229,6 +234,16 @@ QString PermissionClient::lastIntentResult() const
     return m_lastIntentResult;
 }
 
+QString PermissionClient::lastRuleId() const
+{
+    return m_lastRuleId;
+}
+
+QString PermissionClient::lastRuleResult() const
+{
+    return m_lastRuleResult;
+}
+
 QString PermissionClient::activeSpaceId() const
 {
     return m_activeSpaceId;
@@ -275,6 +290,7 @@ void PermissionClient::refreshApps()
     refreshRuntimeStatus();
     refreshSpaces();
     refreshIntents();
+    refreshRules();
 
     QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     if (!launcher.isValid()) {
@@ -403,6 +419,55 @@ void PermissionClient::refreshIntents()
     }
     if (changed) {
         emit intentsChanged();
+    }
+}
+
+void PermissionClient::refreshRules()
+{
+    const QString rulesRegistryPath = QDir::home().filePath(".velyx/rules_registry.json");
+    const QString rulesStatePath = QDir::home().filePath(".velyx/rules_state.json");
+
+    QVariantList rules;
+    QFile registryFile(rulesRegistryPath);
+    if (registryFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(registryFile.readAll());
+        if (document.isObject()) {
+            const QJsonArray entries = document.object().value("rules").toArray();
+            for (const QJsonValue &entry : entries) {
+                if (entry.isObject()) {
+                    rules.push_back(entry.toObject().toVariantMap());
+                }
+            }
+        }
+    }
+
+    QString lastRuleId;
+    QString lastRuleResult;
+    QFile stateFile(rulesStatePath);
+    if (stateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(stateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            lastRuleId = object.value("last_rule_id").toString();
+            lastRuleResult = object.value("last_result").toString();
+        }
+    }
+
+    bool changed = false;
+    if (m_rules != rules) {
+        m_rules = rules;
+        changed = true;
+    }
+    if (m_lastRuleId != lastRuleId) {
+        m_lastRuleId = lastRuleId;
+        changed = true;
+    }
+    if (m_lastRuleResult != lastRuleResult) {
+        m_lastRuleResult = lastRuleResult;
+        changed = true;
+    }
+    if (changed) {
+        emit rulesChanged();
     }
 }
 
@@ -870,6 +935,38 @@ void PermissionClient::runIntent(const QString &intentId)
 
     updateLaunchState("error", QString("Intent %1 недоступен").arg(intentId));
     updateStatusDetails("intent_run", "failed", intentId, "retry");
+}
+
+void PermissionClient::runRule(const QString &ruleId)
+{
+    if (ruleId.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-rule", {"run", ruleId});
+    if (process.waitForStarted(400) && process.waitForFinished(3000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? QString("Rule %1 выполнен").arg(ruleId) : output);
+            updateStatusDetails("rule_run", "ok", ruleId, "refresh_runtime");
+            refreshRules();
+            refreshRuntimeStatus();
+            refreshSpaces();
+            refreshIntents();
+            refreshApps();
+            refreshOpenApps();
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? QString("Не удалось выполнить rule %1").arg(ruleId) : errorOutput);
+        updateStatusDetails("rule_run", "failed", ruleId, "retry");
+        refreshRules();
+        return;
+    }
+
+    updateLaunchState("error", QString("Rule %1 недоступен").arg(ruleId));
+    updateStatusDetails("rule_run", "failed", ruleId, "retry");
 }
 
 void PermissionClient::launchSelectedApp()

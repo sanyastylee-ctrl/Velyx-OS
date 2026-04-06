@@ -1,3 +1,4 @@
+use crate::automation::evaluate_rules;
 use crate::audit::SessionAuditLogger;
 use crate::model::{
     AppRegistryEntry, AppRuntimeSnapshot, SessionState, SpaceRegistryEntry, SpaceRuntimeSnapshot,
@@ -690,62 +691,67 @@ pub async fn orchestrate_once(
         &active_space_state.1,
     );
 
-    let mut store = state.lock().await;
-    let snapshot_before = store.snapshot();
-    let old_state = snapshot_before.current_state.as_str().to_string();
-    let old_space_id = snapshot_before.active_space_id.unwrap_or_default();
-    let old_space_state = snapshot_before.active_space_state.unwrap_or_default();
-    let _ = store.set_app_snapshots(apps.clone());
-    let _ = store.set_space_snapshots(
-        spaces.clone(),
-        Some(active_space.space_id.clone()),
-        Some(active_space.display_name.clone()),
-        Some(active_space_state.0.as_str().to_string()),
-        Some(active_space.security_mode.clone()),
-        active_space.preferred_active_app.clone(),
-        active_space.apps.clone(),
-    );
-    let _ = if new_state == SessionState::Ready {
-        store.mark_ready()
-    } else if new_state == SessionState::Degraded {
-        store.mark_degraded(reason.clone())
-    } else {
-        store.mark_failed(reason.clone())
+    let new_snapshot = {
+        let mut store = state.lock().await;
+        let snapshot_before = store.snapshot();
+        let old_state = snapshot_before.current_state.as_str().to_string();
+        let old_space_id = snapshot_before.active_space_id.clone().unwrap_or_default();
+        let old_space_state = snapshot_before.active_space_state.clone().unwrap_or_default();
+        let _ = store.set_app_snapshots(apps.clone());
+        let _ = store.set_space_snapshots(
+            spaces.clone(),
+            Some(active_space.space_id.clone()),
+            Some(active_space.display_name.clone()),
+            Some(active_space_state.0.as_str().to_string()),
+            Some(active_space.security_mode.clone()),
+            active_space.preferred_active_app.clone(),
+            active_space.apps.clone(),
+        );
+        let _ = if new_state == SessionState::Ready {
+            store.mark_ready()
+        } else if new_state == SessionState::Degraded {
+            store.mark_degraded(reason.clone())
+        } else {
+            store.mark_failed(reason.clone())
+        };
+        let _ = store.update_state(new_state.clone());
+        if old_state != new_state.as_str() {
+            let _ = audit.log_transition(
+                "session_state_changed",
+                &old_state,
+                new_state.as_str(),
+                user_id,
+                "",
+                new_state.as_str(),
+                &reason,
+            );
+        }
+        if old_space_id != active_space.space_id {
+            let _ = audit.log_transition(
+                "space_activate_ok",
+                &old_space_id,
+                &active_space.space_id,
+                user_id,
+                "",
+                active_space_state.0.as_str(),
+                &format!("space_name={}", active_space.display_name),
+            );
+        }
+        if old_space_state != active_space_state.0.as_str() {
+            let _ = audit.log_transition(
+                "space_state_changed",
+                &old_space_state,
+                active_space_state.0.as_str(),
+                user_id,
+                "",
+                active_space_state.0.as_str(),
+                &active_space_state.1,
+            );
+        }
+        store.snapshot()
     };
-    let _ = store.update_state(new_state.clone());
-    if old_state != new_state.as_str() {
-        let _ = audit.log_transition(
-            "session_state_changed",
-            &old_state,
-            new_state.as_str(),
-            user_id,
-            "",
-            new_state.as_str(),
-            &reason,
-        );
-    }
-    if old_space_id != active_space.space_id {
-        let _ = audit.log_transition(
-            "space_activate_ok",
-            &old_space_id,
-            &active_space.space_id,
-            user_id,
-            "",
-            active_space_state.0.as_str(),
-            &format!("space_name={}", active_space.display_name),
-        );
-    }
-    if old_space_state != active_space_state.0.as_str() {
-        let _ = audit.log_transition(
-            "space_state_changed",
-            &old_space_state,
-            active_space_state.0.as_str(),
-            user_id,
-            "",
-            active_space_state.0.as_str(),
-            &active_space_state.1,
-        );
-    }
+
+    evaluate_rules(base_dir, audit, user_id, &previous_snapshot, &new_snapshot).await;
 }
 
 pub fn spawn_orchestrator_loop(

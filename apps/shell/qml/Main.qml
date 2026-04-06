@@ -20,6 +20,7 @@ ApplicationWindow {
     Component.onCompleted: {
         permissionClient.refreshRuntimeStatus()
         permissionClient.refreshSpaces()
+        permissionClient.refreshRules()
         permissionClient.refreshOpenApps()
         permissionClient.refreshApps()
     }
@@ -103,6 +104,7 @@ ApplicationWindow {
         onTriggered: {
             permissionClient.refreshRuntimeStatus()
             permissionClient.refreshSpaces()
+            permissionClient.refreshRules()
             permissionClient.refreshOpenApps()
             permissionClient.refreshSelectedAppRuntime()
             permissionClient.refreshApps()
@@ -266,6 +268,7 @@ ApplicationWindow {
                                 permissionClient.refreshRuntimeStatus()
                                 permissionClient.refreshSpaces()
                                 permissionClient.refreshIntents()
+                                permissionClient.refreshRules()
                                 permissionClient.refreshOpenApps()
                                 permissionClient.refreshApps()
                             }
@@ -318,6 +321,99 @@ ApplicationWindow {
                                                 lastIntentId: permissionClient.lastIntentId
                                                 lastIntentResult: permissionClient.lastIntentResult
                                                 onRunRequested: permissionClient.runIntent(intentId)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            Layout.fillWidth: true
+                            radius: 18
+                            color: "#141c29"
+                            border.width: 1
+                            border.color: Qt.rgba(1, 1, 1, 0.08)
+                            implicitHeight: 170
+
+                            ColumnLayout {
+                                anchors.fill: parent
+                                anchors.margins: 14
+                                spacing: 10
+
+                                Label {
+                                    text: "Automation"
+                                    color: "#f3f6fb"
+                                    font.pixelSize: 16
+                                    font.weight: Font.DemiBold
+                                }
+
+                                Label {
+                                    text: permissionClient.lastRuleId.length > 0
+                                        ? "Last: " + permissionClient.lastRuleId + " • " + permissionClient.lastRuleResult
+                                        : "Rules react to system transitions and keep the runtime aligned."
+                                    color: "#8f99ad"
+                                    font.pixelSize: 11
+                                    wrapMode: Text.WordWrap
+                                }
+
+                                Label {
+                                    text: "Enabled rules: " + permissionClient.rules.filter(function(rule) { return rule.enabled === true }).length
+                                    color: "#a4afc3"
+                                    font.pixelSize: 11
+                                }
+
+                                ScrollView {
+                                    Layout.fillWidth: true
+                                    Layout.fillHeight: true
+                                    clip: true
+
+                                    Column {
+                                        width: parent.width
+                                        spacing: 8
+
+                                        Repeater {
+                                            model: permissionClient.rules
+
+                                            delegate: Rectangle {
+                                                width: parent.width
+                                                radius: 14
+                                                color: modelData.rule_id === permissionClient.lastRuleId ? "#1b2433" : "#151d2a"
+                                                border.width: 1
+                                                border.color: modelData.rule_id === permissionClient.lastRuleId ? "#5b8cff" : Qt.rgba(1, 1, 1, 0.08)
+                                                implicitHeight: 74
+
+                                                RowLayout {
+                                                    anchors.fill: parent
+                                                    anchors.margins: 12
+                                                    spacing: 10
+
+                                                    ColumnLayout {
+                                                        Layout.fillWidth: true
+                                                        spacing: 2
+
+                                                        Label {
+                                                            text: modelData.display_name || modelData.rule_id
+                                                            color: "#f3f6fb"
+                                                            font.pixelSize: 13
+                                                            font.weight: Font.DemiBold
+                                                            elide: Text.ElideRight
+                                                        }
+
+                                                        Label {
+                                                            text: (modelData.trigger_type || "-") + " -> " + (modelData.action_type || "-")
+                                                            color: "#8f99ad"
+                                                            font.pixelSize: 11
+                                                            elide: Text.ElideRight
+                                                        }
+                                                    }
+
+                                                    Button {
+                                                        text: "Run"
+                                                        enabled: modelData.enabled === true
+                                                        onClicked: permissionClient.runRule(modelData.rule_id)
+                                                    }
+                                                }
                                             }
                                         }
                                     }

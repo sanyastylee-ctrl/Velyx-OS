@@ -1,4 +1,5 @@
 mod api;
+mod automation;
 mod audit;
 mod errors;
 mod first_boot;
