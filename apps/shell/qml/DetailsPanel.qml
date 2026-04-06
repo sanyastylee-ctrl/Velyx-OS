@@ -140,6 +140,26 @@ Rectangle {
         }
 
         ListRow {
+            title: "Model routing"
+            subtitle: root.permissionClient.aiModelProfile + "  •  " + root.permissionClient.aiSelectionMode
+                + "  •  " + root.permissionClient.aiRuntimeBackend
+        }
+
+        ListRow {
+            title: "Routing reason"
+            subtitle: root.permissionClient.aiRoutingReason.length > 0
+                ? root.permissionClient.aiRoutingReason
+                : "No routing decision yet"
+        }
+
+        ListRow {
+            title: "Fallback"
+            subtitle: root.permissionClient.aiFallbackReason.length > 0
+                ? root.permissionClient.aiFallbackReason
+                : "No fallback"
+        }
+
+        ListRow {
             title: "AI summary"
             subtitle: root.permissionClient.aiLastSummary.length > 0
                 ? root.permissionClient.aiLastSummary

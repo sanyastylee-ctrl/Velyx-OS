@@ -1,0 +1,728 @@
+#!/usr/bin/env python3
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.request
+import uuid
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Optional
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+MODEL_CONFIG = STATE_DIR / "model_config.json"
+MODEL_STATE = STATE_DIR / "model_state.json"
+MODEL_REGISTRY = STATE_DIR / "model_registry.json"
+MODEL_LOG = STATE_DIR / "model_runtime.log"
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+    return default
+
+
+def save_json(path: Path, payload: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    for attempt in range(6):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt >= 5:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with MODEL_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def print_json(payload: Any) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+DEFAULT_MODELS = [
+    {
+        "model_id": "qwen-small-8b",
+        "display_name": "Qwen Small 8B",
+        "family": "qwen",
+        "size_class": "small",
+        "runtime_backend": "ollama",
+        "endpoint_type": "ollama-compatible",
+        "endpoint_url": "http://127.0.0.1:11434",
+        "local_name": "qwen2.5:7b-instruct",
+        "minimum_ram_gb": 8,
+        "minimum_vram_gb": 0,
+        "recommended_for": ["fast_actions", "assistant", "short_summary"],
+        "installed": False,
+        "enabled": True,
+    },
+    {
+        "model_id": "qwen-main-14b",
+        "display_name": "Qwen Main 14B",
+        "family": "qwen",
+        "size_class": "main",
+        "runtime_backend": "ollama",
+        "endpoint_type": "ollama-compatible",
+        "endpoint_url": "http://127.0.0.1:11434",
+        "local_name": "qwen2.5:14b-instruct",
+        "minimum_ram_gb": 16,
+        "minimum_vram_gb": 10,
+        "recommended_for": ["assistant", "planning", "search", "reasoning"],
+        "installed": False,
+        "enabled": True,
+    },
+    {
+        "model_id": "qwen-heavy-32b",
+        "display_name": "Qwen Heavy 32B",
+        "family": "qwen",
+        "size_class": "heavy",
+        "runtime_backend": "ollama",
+        "endpoint_type": "ollama-compatible",
+        "endpoint_url": "http://127.0.0.1:11434",
+        "local_name": "qwen2.5:32b-instruct",
+        "minimum_ram_gb": 32,
+        "minimum_vram_gb": 20,
+        "recommended_for": ["heavy_reasoning", "deep_compare", "advanced_planning"],
+        "installed": False,
+        "enabled": True,
+    },
+]
+
+
+def ensure_registry() -> dict:
+    payload = read_json(MODEL_REGISTRY, {})
+    if not payload:
+        payload = {"models": DEFAULT_MODELS}
+    known = {model["model_id"] for model in payload.get("models", [])}
+    for model in DEFAULT_MODELS:
+        if model["model_id"] not in known:
+            payload.setdefault("models", []).append(model)
+    save_json(MODEL_REGISTRY, payload)
+    return payload
+
+
+def ensure_config() -> dict:
+    payload = read_json(MODEL_CONFIG, {})
+    defaults = {
+        "selection_mode": "auto_hardware",
+        "default_small_model": "qwen-small-8b",
+        "default_main_model": "qwen-main-14b",
+        "default_heavy_model": "qwen-heavy-32b",
+        "current_active_model": "",
+        "allow_fallback": True,
+        "backend_preferences": ["ollama", "openai-compatible", "stub"],
+        "routing_thresholds": {
+            "fast_system_action": "small",
+            "general_assistant": "main",
+            "search_synthesis": "main",
+            "heavy_reasoning": "heavy",
+        },
+    }
+    changed = False
+    for key, value in defaults.items():
+        if key not in payload:
+            payload[key] = value
+            changed = True
+    if changed or not MODEL_CONFIG.exists():
+        save_json(MODEL_CONFIG, payload)
+    return payload
+
+
+def ensure_state() -> dict:
+    payload = read_json(MODEL_STATE, {})
+    defaults = {
+        "active_model": "",
+        "active_profile": "",
+        "last_used_model": "",
+        "last_used_profile": "",
+        "selection_mode": ensure_config().get("selection_mode", "auto_hardware"),
+        "fallback_count": 0,
+        "last_benchmark": {},
+        "backend_status": "unknown",
+        "model_available": False,
+        "last_route": {},
+        "hardware_profile": {},
+        "last_detected_at": "",
+        "last_run_at": "",
+    }
+    changed = False
+    for key, value in defaults.items():
+        if key not in payload:
+            payload[key] = value
+            changed = True
+    if changed or not MODEL_STATE.exists():
+        save_json(MODEL_STATE, payload)
+    return payload
+
+
+class HardwareProfiler:
+    def _cpu_model(self) -> str:
+        if Path("/proc/cpuinfo").exists():
+            for line in Path("/proc/cpuinfo").read_text(encoding="utf-8", errors="replace").splitlines():
+                if "model name" in line:
+                    return line.split(":", 1)[1].strip()
+        if os.name == "nt":
+            try:
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "(Get-CimInstance Win32_Processor | Select-Object -First 1 -ExpandProperty Name)"],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return result.stdout.strip()
+            except Exception:
+                pass
+        return platform.processor() or platform.machine() or "unknown"
+
+    def _total_ram_gb(self) -> float:
+        if Path("/proc/meminfo").exists():
+            match = re.search(r"MemTotal:\s+(\d+)\s+kB", Path("/proc/meminfo").read_text(encoding="utf-8", errors="replace"))
+            if match:
+                return round(int(match.group(1)) / 1024 / 1024, 1)
+        if os.name == "nt":
+            try:
+                result = subprocess.run(
+                    [
+                        "powershell",
+                        "-NoProfile",
+                        "-Command",
+                        "$mem=(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory; if ($mem) { [math]::Round($mem / 1GB, 1) }",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return float(result.stdout.strip().replace(",", "."))
+            except Exception:
+                pass
+        if hasattr(os, "sysconf") and "SC_PAGE_SIZE" in os.sysconf_names and "SC_PHYS_PAGES" in os.sysconf_names:
+            try:
+                page = os.sysconf("SC_PAGE_SIZE")
+                pages = os.sysconf("SC_PHYS_PAGES")
+                return round((page * pages) / 1024 / 1024 / 1024, 1)
+            except Exception:
+                pass
+        if os.name == "nt":
+            try:
+                result = subprocess.run(
+                    ["powershell", "-NoProfile", "-Command", "[math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB, 1)"],
+                    capture_output=True,
+                    text=True,
+                    timeout=4,
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return float(result.stdout.strip())
+            except Exception:
+                pass
+        return 0.0
+
+    def _gpu_info(self) -> dict:
+        info = {"gpu_available": False, "gpu_name": "", "gpu_vram_gb": 0.0, "acceleration": []}
+        nvidia_smi = shutil.which("nvidia-smi")
+        if nvidia_smi:
+            try:
+                result = subprocess.run(
+                    [nvidia_smi, "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    first = result.stdout.splitlines()[0]
+                    name, memory = [part.strip() for part in first.split(",", 1)]
+                    info["gpu_available"] = True
+                    info["gpu_name"] = name
+                    info["gpu_vram_gb"] = round(float(memory) / 1024, 1)
+                    info["acceleration"].append("cuda")
+                    return info
+            except Exception:
+                pass
+        if shutil.which("vulkaninfo"):
+            info["acceleration"].append("vulkan")
+        if Path("/dev/dri").exists():
+            info["gpu_available"] = True
+        return info
+
+    def detect(self) -> dict:
+        cpu_threads = os.cpu_count() or 0
+        ram_gb = self._total_ram_gb()
+        gpu = self._gpu_info()
+        if ram_gb >= 32 or gpu.get("gpu_vram_gb", 0.0) >= 16:
+            tier = "high"
+            recommended = "main"
+        elif ram_gb >= 16 or gpu.get("gpu_vram_gb", 0.0) >= 8:
+            tier = "medium"
+            recommended = "main"
+        else:
+            tier = "low"
+            recommended = "small"
+        if ram_gb >= 48 or gpu.get("gpu_vram_gb", 0.0) >= 20:
+            recommended = "heavy"
+        profile = {
+            "os": platform.system(),
+            "cpu_model": self._cpu_model(),
+            "cpu_threads": cpu_threads,
+            "total_ram_gb": ram_gb,
+            "gpu_available": gpu["gpu_available"],
+            "gpu_name": gpu["gpu_name"],
+            "gpu_vram_gb": gpu["gpu_vram_gb"],
+            "acceleration": gpu["acceleration"],
+            "hardware_tier": tier,
+            "recommended_profile": recommended,
+            "detected_at": now_iso(),
+        }
+        state = ensure_state()
+        state["hardware_profile"] = profile
+        state["last_detected_at"] = profile["detected_at"]
+        save_json(MODEL_STATE, state)
+        log_event("hardware_detected", "ok", f"tier={tier} recommended={recommended}")
+        return profile
+
+
+class BaseBackend:
+    backend_name = "stub"
+
+    def list_installed(self) -> list[str]:
+        return []
+
+    def ping(self, model_name: str, endpoint_url: str) -> bool:
+        return True
+
+    def pull(self, model_name: str) -> tuple[bool, str]:
+        return False, "backend does not support pull"
+
+    def benchmark(self, model_name: str, endpoint_url: str) -> dict:
+        start = time.perf_counter()
+        ok = self.ping(model_name, endpoint_url)
+        elapsed = round((time.perf_counter() - start) * 1000, 1)
+        return {
+            "success": ok,
+            "first_token_latency_ms": elapsed,
+            "response_latency_ms": elapsed,
+            "throughput_estimate_tps": 0.0,
+        }
+
+
+class OllamaBackend(BaseBackend):
+    backend_name = "ollama"
+
+    def list_installed(self) -> list[str]:
+        tool = shutil.which("ollama")
+        if not tool:
+            return []
+        result = subprocess.run([tool, "list"], capture_output=True, text=True, timeout=10, check=False)
+        if result.returncode != 0:
+            return []
+        names = []
+        for line in result.stdout.splitlines()[1:]:
+            parts = line.split()
+            if parts:
+                names.append(parts[0].strip())
+        return names
+
+    def ping(self, model_name: str, endpoint_url: str) -> bool:
+        try:
+            base = endpoint_url.rstrip("/")
+            request = urllib.request.Request(base + "/api/tags", method="GET")
+            with urllib.request.urlopen(request, timeout=4) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            return any(item.get("name") == model_name for item in payload.get("models", [])) or model_name in self.list_installed()
+        except Exception:
+            return model_name in self.list_installed()
+
+    def pull(self, model_name: str) -> tuple[bool, str]:
+        tool = shutil.which("ollama")
+        if not tool:
+            return False, "ollama is not installed"
+        result = subprocess.run([tool, "pull", model_name], capture_output=True, text=True, timeout=3600, check=False)
+        return result.returncode == 0, (result.stdout.strip() or result.stderr.strip())
+
+    def benchmark(self, model_name: str, endpoint_url: str) -> dict:
+        start = time.perf_counter()
+        payload = {"model": model_name, "prompt": "Reply with a short sentence.", "stream": False}
+        try:
+            request = urllib.request.Request(
+                endpoint_url.rstrip("/") + "/api/generate",
+                data=json.dumps(payload).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                content = json.loads(response.read().decode("utf-8"))
+            elapsed = round((time.perf_counter() - start) * 1000, 1)
+            eval_count = float(content.get("eval_count", 0) or 0)
+            eval_duration = float(content.get("eval_duration", 0) or 0)
+            throughput = round(eval_count / (eval_duration / 1_000_000_000), 2) if eval_duration else 0.0
+            return {
+                "success": True,
+                "first_token_latency_ms": elapsed,
+                "response_latency_ms": elapsed,
+                "throughput_estimate_tps": throughput,
+            }
+        except Exception as exc:
+            elapsed = round((time.perf_counter() - start) * 1000, 1)
+            return {
+                "success": False,
+                "first_token_latency_ms": elapsed,
+                "response_latency_ms": elapsed,
+                "throughput_estimate_tps": 0.0,
+                "error": str(exc),
+            }
+
+
+class OpenAICompatibleBackend(BaseBackend):
+    backend_name = "openai-compatible"
+
+    def ping(self, model_name: str, endpoint_url: str) -> bool:
+        try:
+            request = urllib.request.Request(endpoint_url.rstrip("/") + "/v1/models", method="GET")
+            with urllib.request.urlopen(request, timeout=4) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            return any(item.get("id") == model_name for item in payload.get("data", []))
+        except Exception:
+            return False
+
+
+class StubBackend(BaseBackend):
+    backend_name = "stub"
+
+
+def backend_for(name: str) -> BaseBackend:
+    if name == "ollama":
+        return OllamaBackend()
+    if name == "openai-compatible":
+        return OpenAICompatibleBackend()
+    return StubBackend()
+
+
+class ModelDiscovery:
+    def discover(self) -> dict:
+        registry = ensure_registry()
+        models = registry.get("models", [])
+        installed_cache: dict[str, list[str]] = {}
+        for model in models:
+            backend_name = model.get("runtime_backend", "stub")
+            backend = backend_for(backend_name)
+            if backend_name not in installed_cache:
+                installed_cache[backend_name] = backend.list_installed()
+            model["installed"] = model.get("local_name") in installed_cache[backend_name] if backend_name != "stub" else True
+        save_json(MODEL_REGISTRY, registry)
+        return registry
+
+
+class ModelRouter:
+    def __init__(self) -> None:
+        self.registry = ModelDiscovery().discover()
+        self.config = ensure_config()
+        self.state = ensure_state()
+        self.hardware = self.state.get("hardware_profile") or HardwareProfiler().detect()
+
+    def _model_map(self) -> dict[str, dict]:
+        return {model["model_id"]: model for model in self.registry.get("models", [])}
+
+    def _profile_target_for_task(self, task_type: str) -> str:
+        desired = self.config.get("routing_thresholds", {}).get(task_type, "main")
+        if desired in {"small", "main", "heavy"}:
+            return desired
+        return "main"
+
+    def _default_model_id_for_profile(self, profile: str) -> str:
+        mapping = {
+            "small": self.config.get("default_small_model", "qwen-small-8b"),
+            "main": self.config.get("default_main_model", "qwen-main-14b"),
+            "heavy": self.config.get("default_heavy_model", "qwen-heavy-32b"),
+        }
+        return mapping.get(profile, self.config.get("default_main_model", "qwen-main-14b"))
+
+    def _profile_allowed_by_hardware(self, profile: str) -> bool:
+        ram = float(self.hardware.get("total_ram_gb", 0.0) or 0.0)
+        vram = float(self.hardware.get("gpu_vram_gb", 0.0) or 0.0)
+        if profile == "heavy":
+            return ram >= 32 or vram >= 20
+        if profile == "main":
+            return ram >= 16 or vram >= 8
+        return True
+
+    def resolve(self, task_type: str = "general_assistant", requested_profile: Optional[str] = None) -> dict:
+        model_map = self._model_map()
+        selection_mode = self.config.get("selection_mode", "auto_hardware")
+        profile = requested_profile or "main"
+        explanation = ""
+        fallback_reason = ""
+
+        if selection_mode == "manual":
+            current = self.config.get("current_active_model") or self._default_model_id_for_profile("main")
+            model = model_map.get(current, next(iter(model_map.values())))
+            profile = model.get("size_class", "main")
+            explanation = f"Using manual model selection with {model.get('display_name')}."
+        elif selection_mode == "auto_hardware":
+            profile = self.hardware.get("recommended_profile", "main")
+            explanation = f"Using {profile} profile based on detected hardware tier {self.hardware.get('hardware_tier', 'unknown')}."
+            model = model_map.get(self._default_model_id_for_profile(profile), next(iter(model_map.values())))
+        else:
+            profile = self._profile_target_for_task(task_type)
+            explanation = f"Using {profile} profile for task type {task_type}."
+            model = model_map.get(self._default_model_id_for_profile(profile), next(iter(model_map.values())))
+
+        if not model.get("installed", False):
+            fallback_reason = "requested_model_unavailable"
+        if not self._profile_allowed_by_hardware(model.get("size_class", profile)):
+            fallback_reason = fallback_reason or "hardware_limit"
+
+        if fallback_reason and self.config.get("allow_fallback", True):
+            fallback_chain = ["main", "small"] if model.get("size_class") == "heavy" else ["small"]
+            for fallback_profile in fallback_chain:
+                candidate = model_map.get(self._default_model_id_for_profile(fallback_profile))
+                if candidate and candidate.get("enabled", True) and candidate.get("installed", False):
+                    model = candidate
+                    explanation = f"{explanation} Falling back to {candidate.get('display_name')}."
+                    profile = candidate.get("size_class", fallback_profile)
+                    break
+        elif fallback_reason:
+            explanation = f"{explanation} Requested model is unavailable and fallback is disabled."
+
+        backend_name = model.get("runtime_backend", "stub")
+        backend = backend_for(backend_name)
+        available = backend.ping(model.get("local_name", ""), model.get("endpoint_url", ""))
+        route = {
+            "selection_mode": selection_mode,
+            "task_type": task_type,
+            "requested_profile": requested_profile or profile,
+            "selected_profile": profile,
+            "model_id": model.get("model_id", ""),
+            "display_name": model.get("display_name", ""),
+            "local_name": model.get("local_name", ""),
+            "runtime_backend": backend_name,
+            "endpoint_type": model.get("endpoint_type", "stub"),
+            "endpoint_url": model.get("endpoint_url", ""),
+            "available": available,
+            "fallback_reason": fallback_reason,
+            "explanation": explanation,
+        }
+        self.state["active_model"] = route["model_id"]
+        self.state["active_profile"] = route["selected_profile"]
+        self.state["selection_mode"] = selection_mode
+        self.state["backend_status"] = "ready" if available else "degraded"
+        self.state["model_available"] = available
+        self.state["last_route"] = route
+        self.state["last_run_at"] = now_iso()
+        if fallback_reason:
+            self.state["fallback_count"] = int(self.state.get("fallback_count", 0)) + 1
+        save_json(MODEL_STATE, self.state)
+        log_event("model_routed", "ok" if available else "degraded", f"task={task_type} model={route['model_id']} fallback={fallback_reason}")
+        return route
+
+
+class ModelManager:
+    def __init__(self) -> None:
+        self.registry = ModelDiscovery().discover()
+        self.config = ensure_config()
+        self.state = ensure_state()
+        self.hardware_profiler = HardwareProfiler()
+
+    def list_models(self) -> dict:
+        return ModelDiscovery().discover()
+
+    def status(self) -> dict:
+        self.registry = ModelDiscovery().discover()
+        self.state = ensure_state()
+        return {
+            "selection_mode": self.config.get("selection_mode", "auto_hardware"),
+            "active_model": self.state.get("active_model", ""),
+            "active_profile": self.state.get("active_profile", ""),
+            "backend_status": self.state.get("backend_status", "unknown"),
+            "model_available": self.state.get("model_available", False),
+            "last_route": self.state.get("last_route", {}),
+            "hardware_profile": self.state.get("hardware_profile", {}),
+        }
+
+    def current(self) -> dict:
+        if not self.state.get("last_route"):
+            self.state = ensure_state()
+        if not self.state.get("last_route"):
+            return ModelRouter().resolve("general_assistant")
+        return self.state.get("last_route", {})
+
+    def detect_hardware(self) -> dict:
+        return self.hardware_profiler.detect()
+
+    def recommend(self) -> dict:
+        hardware = self.hardware_profiler.detect()
+        route = ModelRouter().resolve("general_assistant")
+        return {
+            "hardware_tier": hardware.get("hardware_tier", ""),
+            "recommended_model": route.get("model_id", ""),
+            "recommended_profile": route.get("selected_profile", ""),
+            "hardware_profile": hardware,
+            "explanation": route.get("explanation", ""),
+        }
+
+    def _resolve_model(self, model_id_or_name: str) -> Optional[dict]:
+        registry = ModelDiscovery().discover()
+        for model in registry.get("models", []):
+            if model.get("model_id") == model_id_or_name or model.get("local_name") == model_id_or_name:
+                return model
+        return None
+
+    def pull(self, model_id_or_name: str) -> dict:
+        model = self._resolve_model(model_id_or_name)
+        if not model:
+            raise RuntimeError(f"Unknown model: {model_id_or_name}")
+        backend = backend_for(model.get("runtime_backend", "stub"))
+        ok, message = backend.pull(model.get("local_name", ""))
+        registry = ModelDiscovery().discover()
+        if ok:
+            for item in registry.get("models", []):
+                if item.get("model_id") == model.get("model_id"):
+                    item["installed"] = True
+            save_json(MODEL_REGISTRY, registry)
+            log_event("model_pull_ok", "ok", f"model={model.get('model_id')}")
+        else:
+            log_event("model_pull_failed", "failed", f"model={model.get('model_id')} reason={message}")
+        return {"ok": ok, "message": message, "model_id": model.get("model_id")}
+
+    def install_profile(self, profile: str) -> dict:
+        model_id = self.config.get(f"default_{profile}_model")
+        if not model_id:
+            raise RuntimeError(f"Unknown profile: {profile}")
+        return self.pull(model_id)
+
+    def set_default(self, profile: str, model_id: str) -> dict:
+        if profile not in {"small", "main", "heavy"}:
+            raise RuntimeError("Profile must be small, main, or heavy")
+        model = self._resolve_model(model_id)
+        if not model:
+            raise RuntimeError(f"Unknown model: {model_id}")
+        self.config[f"default_{profile}_model"] = model.get("model_id")
+        save_json(MODEL_CONFIG, self.config)
+        log_event("model_default_set", "ok", f"profile={profile} model={model.get('model_id')}")
+        return {"profile": profile, "model_id": model.get("model_id")}
+
+    def use(self, model_id: str) -> dict:
+        model = self._resolve_model(model_id)
+        if not model:
+            raise RuntimeError(f"Unknown model: {model_id}")
+        self.config["selection_mode"] = "manual"
+        self.config["current_active_model"] = model.get("model_id")
+        save_json(MODEL_CONFIG, self.config)
+        route = ModelRouter().resolve("general_assistant")
+        log_event("model_selected_manual", "ok", f"model={model.get('model_id')}")
+        return route
+
+    def set_selection_mode(self, mode: str) -> dict:
+        if mode not in {"manual", "auto_hardware", "auto_task"}:
+            raise RuntimeError("selection mode must be manual, auto_hardware, or auto_task")
+        self.config["selection_mode"] = mode
+        save_json(MODEL_CONFIG, self.config)
+        route = ModelRouter().resolve("general_assistant")
+        log_event("model_selection_mode_changed", "ok", f"mode={mode}")
+        return route
+
+    def benchmark(self, model_id_or_name: Optional[str] = None) -> dict:
+        route = ModelRouter().resolve("general_assistant")
+        model = self._resolve_model(model_id_or_name) if model_id_or_name else self._resolve_model(route.get("model_id", ""))
+        if not model:
+            raise RuntimeError("No model available for benchmark")
+        backend = backend_for(model.get("runtime_backend", "stub"))
+        result = backend.benchmark(model.get("local_name", ""), model.get("endpoint_url", ""))
+        self.state = ensure_state()
+        self.state["last_benchmark"] = {
+            "model_id": model.get("model_id"),
+            "measured_at": now_iso(),
+            **result,
+        }
+        save_json(MODEL_STATE, self.state)
+        log_event("model_benchmark", "ok" if result.get("success") else "failed", f"model={model.get('model_id')}")
+        return self.state["last_benchmark"]
+
+    def route_task(self, task_type: str) -> dict:
+        return ModelRouter().resolve(task_type)
+
+
+def usage() -> int:
+    print(
+        "usage: velyx-model list | status | current | detect-hardware | recommend | benchmark [model] | pull <model> | install-profile <small|main|heavy> | set-default <profile> <model_id> | use <model_id> | set-selection-mode <manual|auto_hardware|auto_task> | route-task <task_type>",
+        file=sys.stderr,
+    )
+    return 1
+
+
+def main() -> int:
+    manager = ModelManager()
+    if len(sys.argv) < 2:
+        return usage()
+    command = sys.argv[1]
+    try:
+        if command == "list":
+            print_json(manager.list_models())
+        elif command == "status":
+            print_json(manager.status())
+        elif command == "current":
+            print_json(manager.current())
+        elif command == "detect-hardware":
+            print_json(manager.detect_hardware())
+        elif command == "recommend":
+            print_json(manager.recommend())
+        elif command == "benchmark":
+            print_json(manager.benchmark(sys.argv[2] if len(sys.argv) > 2 else None))
+        elif command == "pull" and len(sys.argv) > 2:
+            print_json(manager.pull(sys.argv[2]))
+        elif command == "install-profile" and len(sys.argv) > 2:
+            print_json(manager.install_profile(sys.argv[2]))
+        elif command == "set-default" and len(sys.argv) > 3:
+            print_json(manager.set_default(sys.argv[2], sys.argv[3]))
+        elif command == "use" and len(sys.argv) > 2:
+            print_json(manager.use(sys.argv[2]))
+        elif command == "set-selection-mode" and len(sys.argv) > 2:
+            print_json(manager.set_selection_mode(sys.argv[2]))
+        elif command == "route-task" and len(sys.argv) > 2:
+            print_json(manager.route_task(sys.argv[2]))
+        else:
+            return usage()
+        return 0
+    except Exception as exc:
+        log_event("model_cli_failed", "failed", str(exc))
+        print(str(exc), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

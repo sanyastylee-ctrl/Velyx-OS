@@ -45,6 +45,8 @@ AI_CONFIG = STATE_DIR / "ai_config.json"
 AI_STATE = STATE_DIR / "ai_state.json"
 AI_LOG = STATE_DIR / "ai.log"
 AI_FEEDBACK = STATE_DIR / "ai_feedback.log"
+MODEL_CONFIG = STATE_DIR / "model_config.json"
+MODEL_STATE = STATE_DIR / "model_state.json"
 DEFAULT_MIN_SUGGEST = 0.45
 DEFAULT_MIN_AUTO = 0.80
 SAFE_ACTION_TYPES = {
@@ -132,12 +134,19 @@ def ensure_state(config: dict) -> dict:
     defaults = {
         "current_mode": config.get("mode", "off"),
         "current_model": config.get("model_name", ""),
+        "current_model_profile": "",
+        "selection_mode": "manual",
+        "runtime_backend": config.get("endpoint_type", "stub"),
         "last_summary": "",
         "last_suggestion": {},
         "last_action_proposal": {},
         "last_error": "",
         "last_run_at": "",
         "model_available": False,
+        "last_task_type": "",
+        "last_model_route": {},
+        "last_routing_reason": "",
+        "last_fallback_reason": "",
         "last_context_hash": "",
         "last_context_snapshot": {},
         "last_trigger": "",
@@ -575,6 +584,57 @@ class ModelAdapterFactory:
         return StubModelAdapter(config)
 
 
+class ModelRouterBridge:
+    @staticmethod
+    def _resolve_tool() -> Optional[list[str]]:
+        tool = shutil.which("velyx-model")
+        if tool:
+            return [tool]
+        local = Path(__file__).resolve().parent / "velyx-model"
+        if local.exists():
+            return [sys.executable, str(local)]
+        return None
+
+    @classmethod
+    def route(cls, task_type: str) -> dict:
+        tool_cmd = cls._resolve_tool()
+        if not tool_cmd:
+            return {
+                "selection_mode": "manual",
+                "task_type": task_type,
+                "selected_profile": "main",
+                "model_id": "",
+                "display_name": "",
+                "local_name": "",
+                "runtime_backend": "stub",
+                "endpoint_type": "stub",
+                "endpoint_url": "http://127.0.0.1:11434",
+                "available": False,
+                "fallback_reason": "model_tool_unavailable",
+                "explanation": "Model router is unavailable, falling back to the configured AI model.",
+        }
+        try:
+            result = subprocess.run([*tool_cmd, "route-task", task_type], capture_output=True, text=True, timeout=10, check=False)
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout)
+        except Exception:
+            pass
+        return {
+            "selection_mode": "manual",
+            "task_type": task_type,
+            "selected_profile": "main",
+            "model_id": "",
+            "display_name": "",
+            "local_name": "",
+            "runtime_backend": "stub",
+            "endpoint_type": "stub",
+            "endpoint_url": "http://127.0.0.1:11434",
+            "available": False,
+            "fallback_reason": "route_failed",
+            "explanation": "Model routing failed, using the configured AI model instead.",
+        }
+
+
 class AiEngine:
     def __init__(self) -> None:
         self.config = ensure_config()
@@ -585,10 +645,36 @@ class AiEngine:
         self.dispatcher = AgentDispatcher()
         self.adapter = ModelAdapterFactory.build(self.config)
 
+    @staticmethod
+    def _task_type_for(task: str) -> str:
+        if task == "suggest_next_action":
+            return "fast_system_action"
+        if task == "summarize_system":
+            return "general_assistant"
+        if task == "explain_current_state":
+            return "general_assistant"
+        return "general_assistant"
+
+    def _effective_config_for_task(self, task: str) -> tuple[dict, dict]:
+        route = ModelRouterBridge.route(self._task_type_for(task))
+        effective = dict(self.config)
+        if route.get("local_name"):
+            effective["model_name"] = route.get("local_name")
+        if route.get("endpoint_type"):
+            effective["endpoint_type"] = route.get("endpoint_type")
+        if route.get("endpoint_url"):
+            effective["endpoint_url"] = route.get("endpoint_url")
+        if route.get("runtime_backend"):
+            effective["provider"] = route.get("runtime_backend")
+        return effective, route
+
     def _save_state(self) -> None:
         save_json(AI_STATE, self.state)
 
-    def _update_model_availability(self) -> None:
+    def _update_model_availability(self, effective_config: Optional[dict] = None, route: Optional[dict] = None) -> None:
+        runtime_config = effective_config or self.config
+        runtime_route = route or {}
+        self.adapter = ModelAdapterFactory.build(runtime_config)
         available = False
         try:
             available = self.adapter.ping()
@@ -596,17 +682,25 @@ class AiEngine:
             self.state["last_error"] = str(exc)
         self.state["model_available"] = available
         self.state["current_mode"] = self.config.get("mode", "off")
-        self.state["current_model"] = self.config.get("model_name", "")
+        self.state["current_model"] = runtime_config.get("model_name", "")
+        self.state["current_model_profile"] = runtime_route.get("selected_profile", "")
+        self.state["selection_mode"] = runtime_route.get("selection_mode", read_json(MODEL_CONFIG, {}).get("selection_mode", "manual"))
+        self.state["runtime_backend"] = runtime_route.get("runtime_backend", runtime_config.get("endpoint_type", "stub"))
+        self.state["last_model_route"] = runtime_route
+        self.state["last_routing_reason"] = runtime_route.get("explanation", "")
+        self.state["last_fallback_reason"] = runtime_route.get("fallback_reason", "")
 
     def _generate(self, task: str, trigger: str = "manual") -> tuple[dict, dict]:
         snapshot = self.context_builder.build_snapshot()
         log_event("ai_context_built", "ok", f"task={task} trigger={trigger}")
-        self._update_model_availability()
+        effective_config, route = self._effective_config_for_task(task)
+        self._update_model_availability(effective_config, route)
         log_event("ai_request_begin", "started", f"task={task} trigger={trigger}")
         raw = self.adapter.generate(task, snapshot, trigger)
         parsed = self.parser.parse(raw, fallback_summary=f"AI {task} completed.")
         log_event("ai_request_ok", "ok", f"task={task} trigger={trigger}")
         log_event("ai_response_parsed", "ok", f"task={task} action={parsed.get('recommended_action_type')}")
+        self.state["last_task_type"] = self._task_type_for(task)
         return snapshot, parsed
 
     def summary(self) -> str:
@@ -838,16 +932,22 @@ class AiEngine:
         return f"AI mode set to {mode}"
 
     def status(self) -> str:
-        self._update_model_availability()
+        effective_config, route = self._effective_config_for_task("summarize_system")
+        self._update_model_availability(effective_config, route)
         self._save_state()
         return json.dumps(
             {
                 "mode": self.config.get("mode"),
                 "provider": self.config.get("provider"),
                 "model_family": self.config.get("model_family"),
-                "model_name": self.config.get("model_name"),
+                "model_name": self.state.get("current_model", self.config.get("model_name")),
+                "model_profile": self.state.get("current_model_profile", ""),
+                "selection_mode": self.state.get("selection_mode", ""),
+                "runtime_backend": self.state.get("runtime_backend", ""),
                 "endpoint_type": self.config.get("endpoint_type"),
                 "model_available": self.state.get("model_available", False),
+                "routing_reason": self.state.get("last_routing_reason", ""),
+                "fallback_reason": self.state.get("last_fallback_reason", ""),
                 "last_suggestion_result": self.state.get("last_suggestion_result", ""),
                 "last_error": self.state.get("last_error", ""),
             },
@@ -871,7 +971,8 @@ class AiEngine:
         return "\n".join(lines)
 
     def ping_model(self) -> str:
-        self._update_model_availability()
+        effective_config, route = self._effective_config_for_task("summarize_system")
+        self._update_model_availability(effective_config, route)
         self._save_state()
         return "available" if self.state.get("model_available", False) else "unavailable"
 

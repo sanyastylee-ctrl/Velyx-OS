@@ -49,6 +49,10 @@ for file in \
   "${STATE_DIR}/ai_config.json" \
   "${STATE_DIR}/ai_state.json" \
   "${STATE_DIR}/ai_feedback.log" \
+  "${STATE_DIR}/model_runtime.log" \
+  "${STATE_DIR}/model_config.json" \
+  "${STATE_DIR}/model_state.json" \
+  "${STATE_DIR}/model_registry.json" \
   "${STATE_DIR}/assistant.log" \
   "${STATE_DIR}/assistant_config.json" \
   "${STATE_DIR}/assistant_state.json" \

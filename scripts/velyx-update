@@ -333,6 +333,9 @@ perform_rollback() {
     if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-ai" ]]; then
       "${PREFIX}/bin/velyx-ai" status >/dev/null || true
     fi
+    if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-model" ]]; then
+      "${PREFIX}/bin/velyx-model" status >/dev/null || true
+    fi
     if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-assistant" ]]; then
       "${PREFIX}/bin/velyx-assistant" status >/dev/null || true
     fi
@@ -454,6 +457,7 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-rule" \
   "${STAGING_PREFIX}/bin/velyx-agent" \
   "${STAGING_PREFIX}/bin/velyx-ai" \
+  "${STAGING_PREFIX}/bin/velyx-model" \
   "${STAGING_PREFIX}/bin/velyx-assistant" \
   "${STAGING_PREFIX}/bin/velyx-shell" \
   "${STAGING_PREFIX}/libexec/velyx-user-session-bootstrap" \
@@ -515,6 +519,9 @@ if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-rule" ]]; th
 fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-ai" ]]; then
   "${PREFIX}/bin/velyx-ai" status >/dev/null || true
+fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-model" ]]; then
+  "${PREFIX}/bin/velyx-model" status >/dev/null || true
 fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-assistant" ]]; then
   "${PREFIX}/bin/velyx-assistant" status >/dev/null || true

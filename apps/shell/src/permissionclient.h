@@ -49,6 +49,11 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString aiMode READ aiMode NOTIFY aiStateChanged)
     Q_PROPERTY(QString aiProvider READ aiProvider NOTIFY aiStateChanged)
     Q_PROPERTY(QString aiModelName READ aiModelName NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiModelProfile READ aiModelProfile NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiSelectionMode READ aiSelectionMode NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiRuntimeBackend READ aiRuntimeBackend NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiRoutingReason READ aiRoutingReason NOTIFY aiStateChanged)
+    Q_PROPERTY(QString aiFallbackReason READ aiFallbackReason NOTIFY aiStateChanged)
     Q_PROPERTY(bool aiModelAvailable READ aiModelAvailable NOTIFY aiStateChanged)
     Q_PROPERTY(QString aiLastSummary READ aiLastSummary NOTIFY aiStateChanged)
     Q_PROPERTY(QString aiSuggestionMessage READ aiSuggestionMessage NOTIFY aiStateChanged)
@@ -113,6 +118,8 @@ public:
     Q_INVOKABLE void applyAiSuggestion();
     Q_INVOKABLE void dismissAiSuggestion();
     Q_INVOKABLE void blockAiSuggestion();
+    Q_INVOKABLE void setModelSelectionMode(const QString &mode);
+    Q_INVOKABLE void detectModelHardware();
     Q_INVOKABLE void askAssistant(const QString &query);
     Q_INVOKABLE void approveAssistant(const QString &requestId);
     Q_INVOKABLE void denyAssistant(const QString &requestId);
@@ -158,6 +165,11 @@ public:
     QString aiMode() const;
     QString aiProvider() const;
     QString aiModelName() const;
+    QString aiModelProfile() const;
+    QString aiSelectionMode() const;
+    QString aiRuntimeBackend() const;
+    QString aiRoutingReason() const;
+    QString aiFallbackReason() const;
     bool aiModelAvailable() const;
     QString aiLastSummary() const;
     QString aiSuggestionMessage() const;
@@ -270,6 +282,11 @@ private:
     QString m_aiMode {"off"};
     QString m_aiProvider {"local"};
     QString m_aiModelName;
+    QString m_aiModelProfile;
+    QString m_aiSelectionMode {"manual"};
+    QString m_aiRuntimeBackend {"stub"};
+    QString m_aiRoutingReason;
+    QString m_aiFallbackReason;
     bool m_aiModelAvailable {false};
     QString m_aiLastSummary;
     QString m_aiSuggestionMessage;

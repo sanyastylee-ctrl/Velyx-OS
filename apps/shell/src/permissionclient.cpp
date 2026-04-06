@@ -274,6 +274,31 @@ QString PermissionClient::aiModelName() const
     return m_aiModelName;
 }
 
+QString PermissionClient::aiModelProfile() const
+{
+    return m_aiModelProfile;
+}
+
+QString PermissionClient::aiSelectionMode() const
+{
+    return m_aiSelectionMode;
+}
+
+QString PermissionClient::aiRuntimeBackend() const
+{
+    return m_aiRuntimeBackend;
+}
+
+QString PermissionClient::aiRoutingReason() const
+{
+    return m_aiRoutingReason;
+}
+
+QString PermissionClient::aiFallbackReason() const
+{
+    return m_aiFallbackReason;
+}
+
 bool PermissionClient::aiModelAvailable() const
 {
     return m_aiModelAvailable;
@@ -636,10 +661,16 @@ void PermissionClient::refreshAiState()
 
     const QString configPath = QDir::home().filePath(".velyx/ai_config.json");
     const QString statePath = QDir::home().filePath(".velyx/ai_state.json");
+    const QString modelStatePath = QDir::home().filePath(".velyx/model_state.json");
 
     QString mode {"off"};
     QString provider {"local"};
     QString modelName;
+    QString modelProfile;
+    QString selectionMode {"manual"};
+    QString runtimeBackend {"stub"};
+    QString routingReason;
+    QString fallbackReason;
     bool modelAvailable = false;
     QString lastSummary;
     QString suggestionMessage;
@@ -657,6 +688,7 @@ void PermissionClient::refreshAiState()
             mode = object.value("mode").toString(mode);
             provider = object.value("provider").toString(provider);
             modelName = object.value("model_name").toString(modelName);
+            runtimeBackend = object.value("endpoint_type").toString(runtimeBackend);
         }
     }
 
@@ -667,9 +699,14 @@ void PermissionClient::refreshAiState()
             const QJsonObject object = document.object();
             mode = object.value("current_mode").toString(mode);
             modelName = object.value("current_model").toString(modelName);
+            modelProfile = object.value("current_model_profile").toString(modelProfile);
+            selectionMode = object.value("selection_mode").toString(selectionMode);
+            runtimeBackend = object.value("runtime_backend").toString(runtimeBackend);
             modelAvailable = object.value("model_available").toBool(false);
             lastSummary = object.value("last_summary").toString();
             lastError = object.value("last_error").toString();
+            routingReason = object.value("last_routing_reason").toString();
+            fallbackReason = object.value("last_fallback_reason").toString();
 
             const QJsonObject suggestion = object.value("last_suggestion").toObject();
             if (!suggestion.isEmpty()) {
@@ -679,6 +716,34 @@ void PermissionClient::refreshAiState()
                 suggestionConfidence = suggestion.value("confidence").toDouble(0.0);
                 suggestionAvailable = suggestion.value("dismissed").toBool(false) == false
                     && (suggestionActionType != "none" || !suggestionMessage.isEmpty());
+            }
+        }
+    }
+
+    QFile modelStateFile(modelStatePath);
+    if (modelStateFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(modelStateFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            const QJsonObject route = object.value("last_route").toObject();
+            if (modelProfile.isEmpty()) {
+                modelProfile = object.value("active_profile").toString(modelProfile);
+            }
+            if (selectionMode == "manual") {
+                selectionMode = object.value("selection_mode").toString(selectionMode);
+            }
+            if (runtimeBackend == "stub") {
+                runtimeBackend = route.value("runtime_backend").toString(runtimeBackend);
+            }
+            if (modelName.isEmpty()) {
+                modelName = object.value("active_model").toString(modelName);
+            }
+            if (!modelAvailable) {
+                modelAvailable = object.value("model_available").toBool(modelAvailable);
+            }
+            if (fallbackReason.isEmpty()) {
+                fallbackReason = route.value("fallback_reason").toString(fallbackReason);
+                routingReason = route.value("explanation").toString(routingReason);
             }
         }
     }
@@ -694,6 +759,26 @@ void PermissionClient::refreshAiState()
     }
     if (m_aiModelName != modelName) {
         m_aiModelName = modelName;
+        changed = true;
+    }
+    if (m_aiModelProfile != modelProfile) {
+        m_aiModelProfile = modelProfile;
+        changed = true;
+    }
+    if (m_aiSelectionMode != selectionMode) {
+        m_aiSelectionMode = selectionMode;
+        changed = true;
+    }
+    if (m_aiRuntimeBackend != runtimeBackend) {
+        m_aiRuntimeBackend = runtimeBackend;
+        changed = true;
+    }
+    if (m_aiRoutingReason != routingReason) {
+        m_aiRoutingReason = routingReason;
+        changed = true;
+    }
+    if (m_aiFallbackReason != fallbackReason) {
+        m_aiFallbackReason = fallbackReason;
         changed = true;
     }
     if (m_aiModelAvailable != modelAvailable) {
@@ -1532,6 +1617,55 @@ void PermissionClient::blockAiSuggestion()
 
     updateLaunchState("error", "AI suggestion block unavailable");
     updateStatusDetails("ai_block", "failed", "ai_unavailable", "retry");
+}
+
+void PermissionClient::setModelSelectionMode(const QString &mode)
+{
+    const QString trimmed = mode.trimmed();
+    if (trimmed.isEmpty()) {
+        return;
+    }
+
+    QProcess process;
+    process.start("velyx-model", {"set-selection-mode", trimmed});
+    if (process.waitForStarted(400) && process.waitForFinished(6000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? QString("Model selection set to %1").arg(trimmed) : output);
+            updateStatusDetails("model_selection_mode", "ok", trimmed, "observe_runtime");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? QString("Не удалось переключить model selection mode: %1").arg(trimmed) : errorOutput);
+        updateStatusDetails("model_selection_mode", "failed", trimmed, "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Model runtime unavailable");
+    updateStatusDetails("model_selection_mode", "failed", trimmed, "retry");
+}
+
+void PermissionClient::detectModelHardware()
+{
+    QProcess process;
+    process.start("velyx-model", {"detect-hardware"});
+    if (process.waitForStarted(400) && process.waitForFinished(6000)) {
+        const QString output = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+        const QString errorOutput = QString::fromUtf8(process.readAllStandardError()).trimmed();
+        refreshAiState();
+        if (process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0) {
+            updateLaunchState("ok", output.isEmpty() ? "Hardware profile updated" : output);
+            updateStatusDetails("model_detect_hardware", "ok", m_aiSelectionMode, "review");
+            return;
+        }
+        updateLaunchState("error", errorOutput.isEmpty() ? "Не удалось определить hardware profile" : errorOutput);
+        updateStatusDetails("model_detect_hardware", "failed", "detect", "retry");
+        return;
+    }
+
+    updateLaunchState("error", "Model hardware detection unavailable");
+    updateStatusDetails("model_detect_hardware", "failed", "detect", "retry");
 }
 
 void PermissionClient::askAssistant(const QString &query)

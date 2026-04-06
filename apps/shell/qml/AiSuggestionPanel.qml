@@ -45,6 +45,20 @@ Rectangle {
                 value: root.permissionClient.aiModelName.length > 0 ? root.permissionClient.aiModelName : "unconfigured"
                 tone: root.permissionClient.aiModelAvailable ? "success" : "warning"
             }
+
+            StatusChip {
+                compact: true
+                label: "Selection"
+                value: root.permissionClient.aiSelectionMode
+                tone: "neutral"
+            }
+
+            StatusChip {
+                compact: true
+                label: "Profile"
+                value: root.permissionClient.aiModelProfile.length > 0 ? root.permissionClient.aiModelProfile : "main"
+                tone: "accent"
+            }
         }
 
         RowLayout {
@@ -57,6 +71,17 @@ Rectangle {
             Item { Layout.fillWidth: true }
             Button { text: "Explain"; onClicked: root.permissionClient.runAiExplain() }
             Button { text: "Suggest"; onClicked: root.permissionClient.runAiSuggest() }
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            spacing: 8
+
+            Button { text: "Manual"; onClicked: root.permissionClient.setModelSelectionMode("manual") }
+            Button { text: "Auto by hardware"; onClicked: root.permissionClient.setModelSelectionMode("auto_hardware") }
+            Button { text: "Auto by task"; onClicked: root.permissionClient.setModelSelectionMode("auto_task") }
+            Item { Layout.fillWidth: true }
+            Button { text: "Re-detect"; onClicked: root.permissionClient.detectModelHardware() }
         }
 
         Rectangle {
@@ -94,6 +119,17 @@ Rectangle {
                         + "  •  Confidence: " + Number(root.permissionClient.aiSuggestionConfidence).toFixed(2)
                     color: Theme.textSecondary
                     font.pixelSize: 11
+                }
+
+                Label {
+                    visible: root.permissionClient.aiRoutingReason.length > 0 || root.permissionClient.aiFallbackReason.length > 0
+                    Layout.fillWidth: true
+                    text: root.permissionClient.aiFallbackReason.length > 0
+                        ? root.permissionClient.aiRoutingReason + " Fallback: " + root.permissionClient.aiFallbackReason
+                        : root.permissionClient.aiRoutingReason
+                    color: Theme.textMuted
+                    font.pixelSize: 11
+                    wrapMode: Text.WordWrap
                 }
             }
         }

@@ -46,6 +46,7 @@ SESSION_STATE = STATE_DIR / "session_state.json"
 INTENT_STATE = STATE_DIR / "intent_state.json"
 RULES_STATE = STATE_DIR / "rules_state.json"
 AGENT_STATE = STATE_DIR / "agent_state.json"
+MODEL_STATE = STATE_DIR / "model_state.json"
 SPACES_REGISTRY = Path(ENV.get("VELYX_SPACES_REGISTRY") or (STATE_DIR / "spaces_registry.json"))
 INTENTS_REGISTRY = Path(ENV.get("VELYX_INTENTS_REGISTRY") or (STATE_DIR / "intents_registry.json"))
 RULES_REGISTRY = Path(ENV.get("VELYX_RULES_REGISTRY") or (STATE_DIR / "rules_registry.json"))
@@ -188,6 +189,10 @@ def ensure_state() -> dict:
         "last_run_at": "",
         "mode": ensure_ai_mode(),
         "network_access": ensure_config().get("network_access", "ask"),
+        "last_model_route": {},
+        "last_task_type": "",
+        "last_model_choice_reason": "",
+        "last_model_fallback_reason": "",
     }
     changed = False
     for key, value in defaults.items():
@@ -606,6 +611,46 @@ class RequestParser:
         }
 
 
+class ModelRouteBridge:
+    @staticmethod
+    def resolve(task_type: str) -> dict:
+        tool_cmd: Optional[list[str]] = None
+        tool = shutil.which("velyx-model")
+        if tool is not None:
+            tool_cmd = [tool]
+        else:
+            local_script = Path(__file__).resolve().parent / "velyx-model"
+            if local_script.exists():
+                tool_cmd = [sys.executable, str(local_script)]
+        if not tool_cmd:
+            return {
+                "task_type": task_type,
+                "selected_profile": "main",
+                "model_id": "",
+                "display_name": "",
+                "runtime_backend": "stub",
+                "available": False,
+                "fallback_reason": "model_tool_unavailable",
+                "explanation": "Model router is unavailable. Falling back to the assistant heuristics.",
+        }
+        try:
+            result = subprocess.run([*tool_cmd, "route-task", task_type], capture_output=True, text=True, timeout=10, check=False)
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout)
+        except Exception:
+            pass
+        return {
+            "task_type": task_type,
+            "selected_profile": "main",
+            "model_id": "",
+            "display_name": "",
+            "runtime_backend": "stub",
+            "available": False,
+            "fallback_reason": "route_failed",
+            "explanation": "Model routing failed. Falling back to the assistant heuristics.",
+        }
+
+
 class PlanBuilder:
     def __init__(self, parser: RequestParser) -> None:
         self.parser = parser
@@ -682,6 +727,28 @@ class PlanBuilder:
                 summary = "Preparing a response."
         return steps, summary
 
+    def classify_task_type(self, query: str, steps: list[PlanStep]) -> str:
+        lowered = query.lower()
+        if any(token in lowered for token in ["compare", "сравни", "architecture", "архитект", "strategy", "стратег", "plan", "спланир", "design", "продумай"]):
+            return "heavy_reasoning"
+        if any(step.tool_id in {"web_search", "fetch_url", "github_search", "docs_lookup", "release_notes_lookup", "webpage_summary"} for step in steps):
+            return "search_synthesis"
+        if all(step.tool_id in {
+            "activate_space",
+            "run_intent",
+            "launch_app",
+            "stop_app",
+            "restart_app",
+            "restart_runtime",
+            "run_update",
+            "enter_recovery",
+            "get_system_status",
+            "get_space_status",
+            "get_running_apps",
+        } for step in steps):
+            return "fast_system_action"
+        return "general_assistant"
+
 
 class ResultSynthesizer:
     def synthesize(self, query: str, step_results: list[dict]) -> dict:
@@ -715,6 +782,22 @@ class AssistantBackend:
         self.parser = RequestParser()
         self.planner = PlanBuilder(self.parser)
         self.synthesizer = ResultSynthesizer()
+
+    def _update_model_route(self, task_type: str, route: dict) -> None:
+        self.state["last_task_type"] = task_type
+        self.state["last_model_route"] = route
+        self.state["last_model_choice_reason"] = route.get("explanation", "")
+        self.state["last_model_fallback_reason"] = route.get("fallback_reason", "")
+
+    def _route_prefix(self) -> str:
+        route = self.state.get("last_model_route", {})
+        if not route:
+            return ""
+        model_name = route.get("display_name") or route.get("model_id") or route.get("selected_profile", "main")
+        explanation = route.get("explanation", "")
+        if explanation:
+            return f"Using {model_name}. {explanation}"
+        return f"Using {model_name} for this request."
 
     def _save(self) -> None:
         self.state["mode"] = ensure_ai_mode()
@@ -750,13 +833,18 @@ class AssistantBackend:
         if completed_results:
             result = self.synthesizer.synthesize(query, completed_results)
             result["status"] = "needs_approval"
+            route_prefix = self._route_prefix()
             result["summary"] = f"{result['summary']} I can also {first.reason.lower()}. Allow it?"
-            result["details"] = summary
+            if route_prefix:
+                result["details"] = "\n".join(filter(None, [route_prefix, summary]))
+            else:
+                result["details"] = summary
         else:
             result = default_result_envelope()
             result["status"] = "needs_approval"
             result["summary"] = f"I can {first.reason.lower()}. Allow it?"
-            result["details"] = summary
+            route_prefix = self._route_prefix()
+            result["details"] = "\n".join(filter(None, [route_prefix, summary]))
         result["pending_action"] = {"request_id": request_id, "tool_id": first.tool_id, "payload": first.payload}
         self.state["last_result"] = result
         self.state["last_assistant_response"] = result["summary"]
@@ -782,6 +870,9 @@ class AssistantBackend:
             step_results.append(result)
             log_event("assistant_tool_ok", "ok", f"tool={step.tool_id}")
         envelope = self.synthesizer.synthesize(query, step_results)
+        route_prefix = self._route_prefix()
+        if route_prefix:
+            envelope["details"] = "\n".join(filter(None, [route_prefix, envelope.get("details", "")]))
         self.state["current_execution_status"] = "idle"
         self.state["last_tool_result"] = step_results[-1] if step_results else {}
         self.state["last_result"] = envelope
@@ -803,11 +894,31 @@ class AssistantBackend:
         add_history_entry(self.state, "user", query)
         log_event("assistant_request_begin", "running", f"query={truncate(query, 120)}")
         steps, summary = self.planner.build(query)
+        task_type = self.planner.classify_task_type(query, steps)
+        route = ModelRouteBridge.resolve(task_type)
+        self._update_model_route(task_type, route)
         self.state["last_plan"] = [asdict(step) for step in steps]
         try:
             result = self._execute_steps(query, steps)
-            feedback("assistant_request_ok", {"query": query, "status": result["status"]})
-            log_event("assistant_request_ok", result["status"], f"query={truncate(query, 120)}")
+            self.state["last_user_request"] = query
+            self.state["last_result"] = result
+            self._save()
+            feedback(
+                "assistant_request_ok",
+                {
+                    "query": query,
+                    "status": result["status"],
+                    "task_type": task_type,
+                    "model_id": route.get("model_id", ""),
+                    "selected_profile": route.get("selected_profile", ""),
+                    "fallback_reason": route.get("fallback_reason", ""),
+                },
+            )
+            log_event(
+                "assistant_request_ok",
+                result["status"],
+                f"query={truncate(query, 120)} task_type={task_type} model={route.get('model_id', '')}",
+            )
             return result
         except Exception as exc:
             result = default_result_envelope()
@@ -817,9 +928,19 @@ class AssistantBackend:
             self.state["current_execution_status"] = "failed"
             self.state["last_result"] = result
             self.state["last_assistant_response"] = result["summary"]
+            self.state["last_user_request"] = query
             add_history_entry(self.state, "assistant", result["summary"], {"status": "failed", "details": str(exc)})
             self._save()
-            feedback("assistant_request_failed", {"query": query, "error": str(exc)})
+            feedback(
+                "assistant_request_failed",
+                {
+                    "query": query,
+                    "error": str(exc),
+                    "task_type": task_type,
+                    "model_id": route.get("model_id", ""),
+                    "selected_profile": route.get("selected_profile", ""),
+                },
+            )
             log_event("assistant_request_failed", "failed", truncate(str(exc), 160))
             return result
 
@@ -879,6 +1000,8 @@ class AssistantBackend:
                     "text": entry.get("text"),
                     "context_snapshot": context_snapshot(),
                     "last_plan": state.get("last_plan", []),
+                    "last_task_type": state.get("last_task_type", ""),
+                    "last_model_route": state.get("last_model_route", {}),
                     "last_result": state.get("last_result", {}),
                     "feedback": items[-8:],
                 }
@@ -914,6 +1037,10 @@ def assistant_status() -> dict:
         "last_assistant_response": state.get("last_assistant_response", ""),
         "pending_request_id": pending.get("request_id", ""),
         "history_size": len(state.get("history", [])),
+        "last_task_type": state.get("last_task_type", ""),
+        "last_model_route": state.get("last_model_route", {}),
+        "last_model_choice_reason": state.get("last_model_choice_reason", ""),
+        "last_model_fallback_reason": state.get("last_model_fallback_reason", ""),
     }
 
 

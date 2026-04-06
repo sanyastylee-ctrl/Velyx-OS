@@ -52,6 +52,20 @@ Rectangle {
                 value: root.permissionClient.aiMode
                 tone: root.permissionClient.aiModelAvailable ? "success" : "neutral"
             }
+
+            StatusChip {
+                compact: true
+                label: "Model"
+                value: root.permissionClient.aiModelName.length > 0 ? root.permissionClient.aiModelName : "unconfigured"
+                tone: root.permissionClient.aiModelAvailable ? "success" : "warning"
+            }
+
+            StatusChip {
+                compact: true
+                label: "Route"
+                value: root.permissionClient.aiModelProfile.length > 0 ? root.permissionClient.aiModelProfile : "main"
+                tone: "accent"
+            }
         }
 
         RowLayout {
@@ -175,6 +189,16 @@ Rectangle {
                         : "Results appear here after the assistant responds."
                     color: Theme.textPrimary
                     font.pixelSize: 12
+                    wrapMode: Text.WordWrap
+                }
+
+                Label {
+                    visible: root.permissionClient.aiRoutingReason.length > 0 || root.permissionClient.aiFallbackReason.length > 0
+                    text: root.permissionClient.aiFallbackReason.length > 0
+                        ? root.permissionClient.aiRoutingReason + " Fallback: " + root.permissionClient.aiFallbackReason
+                        : root.permissionClient.aiRoutingReason
+                    color: Theme.textMuted
+                    font.pixelSize: 11
                     wrapMode: Text.WordWrap
                 }
             }
