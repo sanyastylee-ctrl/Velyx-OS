@@ -245,6 +245,26 @@ bool PermissionClient::recoveryNeeded() const
     return m_recoveryNeeded;
 }
 
+QString PermissionClient::networkState() const
+{
+    return m_networkState;
+}
+
+QString PermissionClient::networkUpdateReachability() const
+{
+    return m_networkUpdateReachability;
+}
+
+QString PermissionClient::networkAiBackendReachability() const
+{
+    return m_networkAiBackendReachability;
+}
+
+QString PermissionClient::networkLastError() const
+{
+    return m_networkLastError;
+}
+
 QString PermissionClient::lastIntentId() const
 {
     return m_lastIntentId;
@@ -1350,6 +1370,8 @@ void PermissionClient::refreshRuntimeStatus()
 {
     bool changed = false;
 
+    QProcess::startDetached("velyx-network", {"check"});
+
     const QDBusInterface launcher(kLauncherService, kLauncherPath, kLauncherInterface, QDBusConnection::sessionBus());
     const QString launcherState = launcher.isValid() ? "available" : "unavailable";
     if (m_launcherAvailability != launcherState) {
@@ -1392,6 +1414,10 @@ void PermissionClient::refreshRuntimeStatus()
     QString updateState = "unknown";
     QString lastUpdateResult;
     bool recoveryNeeded = false;
+    QString networkState = "unknown";
+    QString networkUpdateReachability = "unknown";
+    QString networkAiBackendReachability = "unknown";
+    QString networkLastError;
     if (sessionManager.isValid()) {
         QDBusReply<QVariantMap> reply = sessionManager.call("GetSessionState");
         if (reply.isValid()) {
@@ -1438,6 +1464,19 @@ void PermissionClient::refreshRuntimeStatus()
         }
     }
 
+    const QString networkStatePath = QDir::home().filePath(".velyx/network_state.json");
+    QFile networkFile(networkStatePath);
+    if (networkFile.open(QIODevice::ReadOnly)) {
+        const QJsonDocument document = QJsonDocument::fromJson(networkFile.readAll());
+        if (document.isObject()) {
+            const QJsonObject object = document.object();
+            networkState = object.value("state").toString(networkState);
+            networkUpdateReachability = object.value("update_reachability").toString(networkUpdateReachability);
+            networkAiBackendReachability = object.value("ai_backend_reachability").toString(networkAiBackendReachability);
+            networkLastError = object.value("last_error").toString();
+        }
+    }
+
     if (m_sessionState != sessionState) {
         m_sessionState = sessionState;
         changed = true;
@@ -1464,6 +1503,22 @@ void PermissionClient::refreshRuntimeStatus()
     }
     if (m_recoveryNeeded != recoveryNeeded) {
         m_recoveryNeeded = recoveryNeeded;
+        changed = true;
+    }
+    if (m_networkState != networkState) {
+        m_networkState = networkState;
+        changed = true;
+    }
+    if (m_networkUpdateReachability != networkUpdateReachability) {
+        m_networkUpdateReachability = networkUpdateReachability;
+        changed = true;
+    }
+    if (m_networkAiBackendReachability != networkAiBackendReachability) {
+        m_networkAiBackendReachability = networkAiBackendReachability;
+        changed = true;
+    }
+    if (m_networkLastError != networkLastError) {
+        m_networkLastError = networkLastError;
         changed = true;
     }
     if (m_activeSpaceId != activeSpaceId) {
@@ -2038,6 +2093,7 @@ void PermissionClient::detectModelHardware()
 
 void PermissionClient::checkUpdateSource(const QString &source)
 {
+    QProcess::startDetached("velyx-network", {"check"});
     refreshRuntimeStatus();
     const QString trimmed = source.trimmed();
     const QString message = trimmed.isEmpty()

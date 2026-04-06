@@ -192,6 +192,7 @@ if [[ "${MODE}" != "units-only" ]]; then
   install_helper_script "${ROOT_DIR}/scripts/velyx-rule" "velyx-rule"
   install_helper_script "${ROOT_DIR}/scripts/velyx-agent" "velyx-agent"
   install_helper_script "${ROOT_DIR}/scripts/velyx-ai" "velyx-ai"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-network" "velyx-network"
   install_helper_script "${ROOT_DIR}/scripts/velyx-model" "velyx-model"
   install_helper_script "${ROOT_DIR}/scripts/velyx-assistant" "velyx-assistant"
   install_helper_script "${ROOT_DIR}/scripts/velyx-dev" "velyx-dev"
@@ -256,6 +257,7 @@ EOF
   install_script_binary "${ROOT_DIR}/scripts/velyx-rule" "velyx-rule"
   install_script_binary "${ROOT_DIR}/scripts/velyx-agent" "velyx-agent"
   install_script_binary "${ROOT_DIR}/scripts/velyx-ai" "velyx-ai"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-network" "velyx-network"
   install_script_binary "${ROOT_DIR}/scripts/velyx-model" "velyx-model"
   install_script_binary "${ROOT_DIR}/scripts/velyx-assistant" "velyx-assistant"
   install_script_binary "${ROOT_DIR}/scripts/velyx-dev" "velyx-dev"
@@ -269,6 +271,7 @@ EOF
     "${BIN_DIR}/velyx-intent" seed-defaults >/dev/null || true
     "${BIN_DIR}/velyx-rule" seed-defaults >/dev/null || true
     "${BIN_DIR}/velyx-ai" status >/dev/null || true
+    "${BIN_DIR}/velyx-network" check >/dev/null || true
     "${BIN_DIR}/velyx-model" status >/dev/null || true
     "${BIN_DIR}/velyx-assistant" status >/dev/null || true
     "${BIN_DIR}/velyx-firstboot" prepare --force --action install --install-mode standard_preview --ai-mode off --model-selection auto_hardware --backend stub --default-space general --predictive-mode off >/dev/null || true

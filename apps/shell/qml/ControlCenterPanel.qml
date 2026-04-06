@@ -19,8 +19,10 @@ Rectangle {
     property string modelIdInput: ""
 
     function toneForState(value) {
-        if (value === "ready" || value === "available" || value === "installed" || value === "active" || value === "ok")
+        if (value === "ready" || value === "available" || value === "installed" || value === "active" || value === "ok" || value === "reachable")
             return "success"
+        if (value === "not_required" || value === "local_only")
+            return "neutral"
         if (value === "failed" || value === "error" || value === "unavailable")
             return "danger"
         if (value === "degraded" || value === "offline")
@@ -234,8 +236,18 @@ Rectangle {
                         Layout.fillWidth: true
                         spacing: 8
 
-                        StatusChip { compact: true; label: "Network"; value: root.permissionClient.firstBootNetworkState.length > 0 ? root.permissionClient.firstBootNetworkState : "unknown"; tone: root.toneForState(root.permissionClient.firstBootNetworkState) }
-                        StatusChip { compact: true; label: "Update reachability"; value: root.permissionClient.firstBootNetworkState === "available" ? "reachable" : "local only"; tone: root.permissionClient.firstBootNetworkState === "available" ? "success" : "warning" }
+                        StatusChip { compact: true; label: "Network"; value: root.permissionClient.networkState; tone: root.toneForState(root.permissionClient.networkState) }
+                        StatusChip { compact: true; label: "Update reachability"; value: root.permissionClient.networkUpdateReachability; tone: root.toneForState(root.permissionClient.networkUpdateReachability) }
+                        StatusChip { compact: true; label: "AI backend"; value: root.permissionClient.networkAiBackendReachability; tone: root.toneForState(root.permissionClient.networkAiBackendReachability) }
+                    }
+
+                    Label {
+                        Layout.fillWidth: true
+                        visible: root.permissionClient.networkLastError.length > 0
+                        text: "Network issue: " + root.permissionClient.networkLastError
+                        color: Theme.textMuted
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 11
                     }
 
                     RowLayout {

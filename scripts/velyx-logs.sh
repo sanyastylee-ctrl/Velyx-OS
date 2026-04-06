@@ -63,6 +63,8 @@ for file in \
   "${STATE_DIR}/assistant_config.json" \
   "${STATE_DIR}/assistant_state.json" \
   "${STATE_DIR}/assistant_feedback.jsonl" \
+  "${STATE_DIR}/network.log" \
+  "${STATE_DIR}/network_state.json" \
   "${STATE_DIR}/dev_mode.log" \
   "${STATE_DIR}/dev_mode.json" \
   "${STATE_DIR}/dev_mode_config.json" \

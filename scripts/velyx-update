@@ -79,6 +79,22 @@ require_tool() {
   }
 }
 
+network_state() {
+  if command -v velyx-network >/dev/null 2>&1; then
+    velyx-network state --refresh 2>/dev/null || printf 'unknown\n'
+    return 0
+  fi
+  printf 'unknown\n'
+}
+
+network_update_reachability() {
+  if command -v velyx-network >/dev/null 2>&1; then
+    velyx-network update-reachable --refresh >/dev/null 2>&1
+    return $?
+  fi
+  return 1
+}
+
 is_remote_source() {
   local value="$1"
   [[ "${value}" == "github" || "${value}" =~ ^https?:// || "${value}" =~ ^git@ ]]
@@ -333,6 +349,9 @@ perform_rollback() {
     if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-ai" ]]; then
       "${PREFIX}/bin/velyx-ai" status >/dev/null || true
     fi
+    if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-network" ]]; then
+      "${PREFIX}/bin/velyx-network" check >/dev/null || true
+    fi
     if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-model" ]]; then
       "${PREFIX}/bin/velyx-model" status >/dev/null || true
     fi
@@ -389,6 +408,11 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -n "${SOURCE_SPEC}" && is_remote_source "${SOURCE_SPEC}" ]]; then
+  NETWORK_STATE="$(network_state)"
+  if ! network_update_reachability; then
+    log_event "update_network_limited" "warning" "state=${NETWORK_STATE} source=${SOURCE_SPEC}"
+    echo "warning: network update source is not reachable right now (state=${NETWORK_STATE}), trying remote fetch and allowing local fallback" >&2
+  fi
   if fetch_remote_source "${SOURCE_SPEC}"; then
     SOURCE_ROOT="${REMOTE_SOURCE_DIR}"
   else
@@ -460,6 +484,7 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-rule" \
   "${STAGING_PREFIX}/bin/velyx-agent" \
   "${STAGING_PREFIX}/bin/velyx-ai" \
+  "${STAGING_PREFIX}/bin/velyx-network" \
   "${STAGING_PREFIX}/bin/velyx-model" \
   "${STAGING_PREFIX}/bin/velyx-assistant" \
   "${STAGING_PREFIX}/bin/velyx-firstboot" \
@@ -526,6 +551,9 @@ if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-rule" ]]; th
 fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-ai" ]]; then
   "${PREFIX}/bin/velyx-ai" status >/dev/null || true
+fi
+if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-network" ]]; then
+  "${PREFIX}/bin/velyx-network" check >/dev/null || true
 fi
 if command -v python3 >/dev/null 2>&1 && [[ -x "${PREFIX}/bin/velyx-model" ]]; then
   "${PREFIX}/bin/velyx-model" status >/dev/null || true

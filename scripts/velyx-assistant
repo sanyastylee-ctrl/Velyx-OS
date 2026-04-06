@@ -47,6 +47,7 @@ INTENT_STATE = STATE_DIR / "intent_state.json"
 RULES_STATE = STATE_DIR / "rules_state.json"
 AGENT_STATE = STATE_DIR / "agent_state.json"
 MODEL_STATE = STATE_DIR / "model_state.json"
+NETWORK_STATE = STATE_DIR / "network_state.json"
 SPACES_REGISTRY = Path(ENV.get("VELYX_SPACES_REGISTRY") or (STATE_DIR / "spaces_registry.json"))
 INTENTS_REGISTRY = Path(ENV.get("VELYX_INTENTS_REGISTRY") or (STATE_DIR / "intents_registry.json"))
 RULES_REGISTRY = Path(ENV.get("VELYX_RULES_REGISTRY") or (STATE_DIR / "rules_registry.json"))
@@ -204,6 +205,22 @@ def ensure_state() -> dict:
     return payload
 
 
+def load_network_status(refresh: bool = False) -> dict:
+    script = Path(__file__).resolve().parent / "velyx-network"
+    command: list[str]
+    if script.exists():
+        command = [sys.executable, str(script), "check" if refresh else "status"]
+    else:
+        command = ["velyx-network", "check" if refresh else "status"]
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True, timeout=6)
+        if result.returncode == 0 and result.stdout.strip():
+            return json.loads(result.stdout)
+    except Exception:
+        pass
+    return read_json(NETWORK_STATE, {})
+
+
 def add_history_entry(state: dict, role: str, text: str, extra: Optional[dict] = None) -> None:
     entry = {"role": role, "text": text, "timestamp": now_iso()}
     if extra:
@@ -221,6 +238,7 @@ def context_snapshot() -> dict:
     intent_state = read_json(INTENT_STATE, {})
     rules_state = read_json(RULES_STATE, {})
     agent_state = read_json(AGENT_STATE, {})
+    network_state = load_network_status(refresh=False)
     spaces = read_json(SPACES_REGISTRY, {})
     apps_registry = read_json(APP_REGISTRY, {})
     running_apps = []
@@ -268,6 +286,9 @@ def context_snapshot() -> dict:
         "top_available_intents": [intent.get("intent_id") for intent in read_json(INTENTS_REGISTRY, {}).get("intents", [])[:5]],
         "top_available_rules": [rule.get("rule_id") for rule in read_json(RULES_REGISTRY, {}).get("rules", [])[:5]],
         "mode": active_space.get("security_mode", ""),
+        "network_state": network_state.get("state", "unknown"),
+        "update_reachability": network_state.get("update_reachability", "unknown"),
+        "ai_backend_reachability": network_state.get("ai_backend_reachability", "unknown"),
         "installed_apps": installed_apps[:10],
         "ai_mode": ai_state.get("current_mode", ensure_ai_mode()),
     }
@@ -427,6 +448,9 @@ class ToolDispatcher:
 
     def _ensure_network_allowed(self, benign: bool) -> None:
         policy = self.config.get("network_access", "ask")
+        network = load_network_status(refresh=True)
+        if network.get("state") == "offline":
+            raise AssistantError("Network is offline")
         if policy == "off":
             raise AssistantError("Network access is disabled")
         if policy == "ask" and not (benign and self.config.get("benign_search_without_approval", True)):
@@ -1233,10 +1257,14 @@ def assistant_status() -> dict:
     config = ensure_config()
     state = ensure_state()
     pending = state.get("pending_approval", {})
+    network = load_network_status(refresh=True)
     return {
         "mode": config.get("mode", ensure_ai_mode()),
         "interaction_mode": config.get("interaction_mode", "interactive"),
         "network_access": config.get("network_access", "ask"),
+        "network_state": network.get("state", "unknown"),
+        "update_reachability": network.get("update_reachability", "unknown"),
+        "ai_backend_reachability": network.get("ai_backend_reachability", "unknown"),
         "current_execution_status": state.get("current_execution_status", "idle"),
         "last_user_request": state.get("last_user_request", ""),
         "last_assistant_response": state.get("last_assistant_response", ""),

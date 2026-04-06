@@ -41,6 +41,10 @@ class PermissionClient : public QObject
     Q_PROPERTY(QString updateState READ updateState NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString lastUpdateResult READ lastUpdateResult NOTIFY runtimeStatusChanged)
     Q_PROPERTY(bool recoveryNeeded READ recoveryNeeded NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString networkState READ networkState NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString networkUpdateReachability READ networkUpdateReachability NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString networkAiBackendReachability READ networkAiBackendReachability NOTIFY runtimeStatusChanged)
+    Q_PROPERTY(QString networkLastError READ networkLastError NOTIFY runtimeStatusChanged)
     Q_PROPERTY(QString lastIntentId READ lastIntentId NOTIFY intentsChanged)
     Q_PROPERTY(QString lastIntentResult READ lastIntentResult NOTIFY intentsChanged)
     Q_PROPERTY(QString lastRuleId READ lastRuleId NOTIFY rulesChanged)
@@ -203,6 +207,10 @@ public:
     QString updateState() const;
     QString lastUpdateResult() const;
     bool recoveryNeeded() const;
+    QString networkState() const;
+    QString networkUpdateReachability() const;
+    QString networkAiBackendReachability() const;
+    QString networkLastError() const;
     QString lastIntentId() const;
     QString lastIntentResult() const;
     QString lastRuleId() const;
@@ -348,6 +356,10 @@ private:
     QString m_updateState {"unknown"};
     QString m_lastUpdateResult;
     bool m_recoveryNeeded {false};
+    QString m_networkState {"unknown"};
+    QString m_networkUpdateReachability {"unknown"};
+    QString m_networkAiBackendReachability {"unknown"};
+    QString m_networkLastError;
     QString m_lastIntentId;
     QString m_lastIntentResult;
     QString m_lastRuleId;

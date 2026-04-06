@@ -1,0 +1,199 @@
+#!/usr/bin/env python3
+import json
+import os
+import socket
+import sys
+import urllib.error
+import urllib.parse
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_env_file() -> dict:
+    env_path = Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))) / "velyx" / "velyx.env"
+    values: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key.strip()] = value.strip()
+    return values
+
+
+ENV = load_env_file()
+STATE_DIR = Path(os.environ.get("VELYX_STATE_DIR") or ENV.get("VELYX_STATE_DIR") or (Path.home() / ".velyx"))
+STATE_FILE = STATE_DIR / "network_state.json"
+LOG_FILE = STATE_DIR / "network.log"
+AI_CONFIG = STATE_DIR / "ai_config.json"
+
+
+def read_json(path: Path, default):
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return default
+    return default
+
+
+def save_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def log_event(event: str, status: str, detail: str = "") -> None:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with LOG_FILE.open("a", encoding="utf-8") as fh:
+        fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
+
+
+def fetch_ok(url: str, timeout: int = 2) -> tuple[bool, str]:
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "VelyxNetwork/1.0"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            status = getattr(response, "status", 200)
+            return 200 <= int(status) < 500, ""
+    except urllib.error.HTTPError as error:
+        if 200 <= error.code < 500:
+            return True, ""
+        return False, f"http_{error.code}"
+    except Exception as error:
+        return False, error.__class__.__name__
+
+
+def resolve_host(host: str) -> tuple[bool, str]:
+    try:
+        socket.getaddrinfo(host, None)
+        return True, ""
+    except Exception as error:
+        return False, error.__class__.__name__
+
+
+def ai_backend_status() -> tuple[str, bool, str]:
+    config = read_json(AI_CONFIG, {})
+    endpoint_type = str(config.get("endpoint_type", "stub"))
+    endpoint_url = str(config.get("endpoint_url", ""))
+    enabled = bool(config.get("enabled", False)) and str(config.get("mode", "off")) != "off"
+
+    if endpoint_type == "stub" or not enabled:
+        return "not_required", True, ""
+
+    if not endpoint_url:
+        return "unavailable", False, "missing_endpoint"
+
+    if "ollama" in endpoint_type or "11434" in endpoint_url:
+        parsed = urllib.parse.urlparse(endpoint_url)
+        base = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else endpoint_url.rstrip("/")
+        ok, reason = fetch_ok(base.rstrip("/") + "/api/tags")
+        return ("reachable" if ok else "unavailable"), ok, reason
+
+    if "openai" in endpoint_type or endpoint_type == "local_http":
+        parsed = urllib.parse.urlparse(endpoint_url)
+        base = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else endpoint_url.rstrip("/")
+        ok, reason = fetch_ok(base.rstrip("/") + "/models")
+        return ("reachable" if ok else "unavailable"), ok, reason
+
+    ok, reason = fetch_ok(endpoint_url)
+    return ("reachable" if ok else "unavailable"), ok, reason
+
+
+def update_source_status() -> tuple[str, bool, str]:
+    source = os.environ.get("VELYX_UPDATE_SOURCE", "github")
+    if source == "github":
+        ok, reason = fetch_ok("https://github.com")
+        return ("reachable" if ok else "unavailable"), ok, reason
+    if source.startswith("http://") or source.startswith("https://"):
+        ok, reason = fetch_ok(source)
+        return ("reachable" if ok else "unavailable"), ok, reason
+    return "local_only", True, ""
+
+
+def detect_state() -> dict:
+    internet_ok, internet_reason = fetch_ok("https://example.com")
+    github_dns_ok, github_dns_reason = resolve_host("github.com")
+    update_reachability, update_ok, update_reason = update_source_status()
+    ai_reachability, ai_ok, ai_reason = ai_backend_status()
+
+    if not internet_ok:
+        network_state = "offline"
+    elif update_ok and ai_ok:
+        network_state = "online"
+    else:
+        network_state = "limited"
+
+    last_error = ""
+    if not internet_ok:
+        last_error = f"internet_unreachable:{internet_reason or 'unknown'}"
+    elif not update_ok:
+        last_error = f"update_unreachable:{update_reason or 'unknown'}"
+    elif not ai_ok:
+        last_error = f"ai_backend_unreachable:{ai_reason or 'unknown'}"
+
+    return {
+        "state": network_state,
+        "internet_connectivity": internet_ok,
+        "internet_reason": internet_reason,
+        "github_dns": github_dns_ok,
+        "github_dns_reason": github_dns_reason,
+        "update_reachability": update_reachability,
+        "update_reachability_ok": update_ok,
+        "update_reason": update_reason,
+        "ai_backend_reachability": ai_reachability,
+        "ai_backend_ok": ai_ok,
+        "ai_backend_reason": ai_reason,
+        "last_error": last_error,
+        "checked_at": now_iso(),
+    }
+
+
+def ensure_state(refresh: bool = False) -> dict:
+    if refresh or not STATE_FILE.exists():
+        payload = detect_state()
+        save_json(STATE_FILE, payload)
+        log_event("network_check", "ok", f"state={payload['state']} update={payload['update_reachability']} ai={payload['ai_backend_reachability']}")
+        return payload
+    return read_json(STATE_FILE, {})
+
+
+def print_json(payload: dict) -> None:
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def main(argv: list[str]) -> int:
+    command = argv[1] if len(argv) > 1 else "status"
+    refresh = "--refresh" in argv or command == "check"
+    state = ensure_state(refresh=refresh)
+
+    if command in {"status", "check"}:
+        print_json(state)
+        return 0
+    if command == "state":
+        print(state.get("state", "unknown"))
+        return 0
+    if command == "internet":
+        return 0 if state.get("internet_connectivity", False) else 1
+    if command == "update-reachable":
+        print(state.get("update_reachability", "unknown"))
+        return 0 if state.get("update_reachability_ok", False) else 1
+    if command == "ai-reachable":
+        print(state.get("ai_backend_reachability", "unknown"))
+        return 0 if state.get("ai_backend_ok", False) else 1
+    if command == "last-error":
+        print(state.get("last_error", ""))
+        return 0
+
+    print(f"unknown command: {command}", file=sys.stderr)
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
