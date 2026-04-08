@@ -1,32 +1,57 @@
 use crate::errors::SessionManagerError;
 use crate::model::ShellRuntime;
-use crate::units::{is_active, main_pid, start_unit};
 use chrono::Utc;
+use std::fs;
+use std::path::PathBuf;
+use tokio::time::{sleep, Duration};
 
-const SHELL_UNIT: &str = "velyx-shell.service";
+fn pid_file_path() -> PathBuf {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".velyx").join("primary-shell.pid")
+}
+
+fn primary_shell_pid() -> Option<u32> {
+    let raw = fs::read_to_string(pid_file_path()).ok()?;
+    let pid = raw.trim().parse::<u32>().ok()?;
+    if PathBuf::from(format!("/proc/{pid}")).exists() {
+        Some(pid)
+    } else {
+        None
+    }
+}
 
 pub async fn start_shell_process() -> Result<ShellRuntime, SessionManagerError> {
-    start_unit(SHELL_UNIT).await?;
-    build_shell_runtime().await
+    for _ in 0..50 {
+        let shell = build_shell_runtime().await?;
+        if shell.shell_pid.is_some() && shell.shell_state == "active" {
+            return Ok(shell);
+        }
+        sleep(Duration::from_millis(100)).await;
+    }
+    Err(SessionManagerError::ShellLaunchFailed(
+        "primary shell launcher on tty1 did not expose a running shell pid in time".to_string(),
+    ))
 }
 
 pub async fn verify_shell_started(shell: &ShellRuntime) -> Result<(), SessionManagerError> {
-    let status = is_active(SHELL_UNIT).await?;
-    if status.trim() == "active" && shell.shell_pid.is_some() {
+    if shell.shell_state == "active" && shell.shell_pid.is_some() {
         Ok(())
     } else {
         Err(SessionManagerError::ShellLaunchFailed(format!(
-            "shell unit '{}' не стал active, status={}",
-            SHELL_UNIT, status
+            "primary shell did not become active, state={}",
+            shell.shell_state
         )))
     }
 }
 
 pub async fn build_shell_runtime() -> Result<ShellRuntime, SessionManagerError> {
-    let pid = main_pid(SHELL_UNIT).await?;
-    let shell_state = match is_active(SHELL_UNIT).await {
-        Ok(status) => status,
-        Err(_) => "unknown".to_string(),
+    let pid = primary_shell_pid();
+    let shell_state = if pid.is_some() {
+        "active".to_string()
+    } else {
+        "inactive".to_string()
     };
     Ok(ShellRuntime {
         shell_pid: pid,

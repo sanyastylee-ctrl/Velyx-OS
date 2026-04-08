@@ -1267,10 +1267,37 @@ void PermissionClient::refreshDevModeState()
 
 void PermissionClient::refreshFirstBootState()
 {
-    QProcess tickProcess;
-    tickProcess.start("velyx-firstboot", {"status"});
-    if (tickProcess.waitForStarted(200)) {
-        tickProcess.waitForFinished(1200);
+    if (!m_firstBootStatusProcess) {
+        auto *statusProcess = new QProcess(this);
+        m_firstBootStatusProcess = statusProcess;
+
+        connect(statusProcess, &QProcess::finished, this,
+            [this, statusProcess](int exitCode, QProcess::ExitStatus exitStatus) {
+                const QString stdoutText = QString::fromUtf8(statusProcess->readAllStandardOutput()).trimmed();
+                const QString stderrText = QString::fromUtf8(statusProcess->readAllStandardError()).trimmed();
+                if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+                    qWarning().noquote()
+                        << "firstboot status refresh finished with error"
+                        << "exit=" << exitCode
+                        << "stderr=" << stderrText;
+                } else if (!stdoutText.isEmpty()) {
+                    qInfo().noquote() << "firstboot status refresh result" << stdoutText;
+                }
+                m_firstBootStatusProcess = nullptr;
+                statusProcess->deleteLater();
+            });
+
+        connect(statusProcess, &QProcess::errorOccurred, this,
+            [this, statusProcess](QProcess::ProcessError error) {
+                qWarning().noquote()
+                    << "firstboot status refresh failed"
+                    << "error=" << error
+                    << "message=" << statusProcess->errorString();
+                m_firstBootStatusProcess = nullptr;
+                statusProcess->deleteLater();
+            });
+
+        statusProcess->start("velyx-firstboot", {"status"});
     }
 
     QString statePath = QDir::home().filePath(".velyx/first_boot.json");
@@ -1475,7 +1502,7 @@ void PermissionClient::refreshRuntimeStatus()
         changed = true;
     }
 
-    const QDBusInterface sessionManager(
+    QDBusInterface sessionManager(
         kSessionManagerService,
         kSessionManagerPath,
         kSessionManagerInterface,
@@ -2259,11 +2286,48 @@ void PermissionClient::setFirstBootAiMode(const QString &mode)
 
 void PermissionClient::setFirstBootStep(const QString &step)
 {
-    QProcess process;
-    process.start("velyx-firstboot", {"set-step", step.trimmed()});
-    if (process.waitForStarted(400) && process.waitForFinished(4000)) {
-        refreshFirstBootState();
+    const QString normalizedStep = step.trimmed();
+    qInfo().noquote() << "firstboot set-step request step=" << normalizedStep;
+    if (m_firstBootStepProcess) {
+        qWarning().noquote()
+            << "firstboot set-step skipped because a previous step update is still running"
+            << "requested_step=" << normalizedStep;
+        return;
     }
+
+    auto *process = new QProcess(this);
+    m_firstBootStepProcess = process;
+
+    connect(process, &QProcess::started, this, [normalizedStep]() {
+        qInfo().noquote() << "firstboot set-step started step=" << normalizedStep;
+    });
+
+    connect(process, &QProcess::finished, this,
+        [this, process](int exitCode, QProcess::ExitStatus exitStatus) {
+            const QString stdoutText = QString::fromUtf8(process->readAllStandardOutput()).trimmed();
+            const QString stderrText = QString::fromUtf8(process->readAllStandardError()).trimmed();
+            qInfo().noquote()
+                << "firstboot set-step result exit=" << exitCode
+                << "status=" << (exitStatus == QProcess::NormalExit ? "normal" : "crash")
+                << "stdout=" << stdoutText
+                << "stderr=" << stderrText;
+            m_firstBootStepProcess = nullptr;
+            process->deleteLater();
+            refreshFirstBootState();
+        });
+
+    connect(process, &QProcess::errorOccurred, this,
+        [this, process, normalizedStep](QProcess::ProcessError error) {
+            qWarning().noquote()
+                << "firstboot set-step failed"
+                << "step=" << normalizedStep
+                << "error=" << error
+                << "message=" << process->errorString();
+            m_firstBootStepProcess = nullptr;
+            process->deleteLater();
+        });
+
+    process->start("velyx-firstboot", {"set-step", normalizedStep});
 }
 
 void PermissionClient::setFirstBootModelSelectionMode(const QString &mode)

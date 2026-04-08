@@ -10,6 +10,7 @@
   "host_requirements": {
     "required_tools": [
       "bash",
+      "fakeroot",
       "truncate",
       "mkfs.ext4",
       "tar"

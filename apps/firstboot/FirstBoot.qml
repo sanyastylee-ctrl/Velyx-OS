@@ -51,7 +51,7 @@ Rectangle {
                         color: Theme.accentCoolStrong
                         font.pixelSize: 12
                         font.weight: Font.DemiBold
-                        letterSpacing: 2
+                        font.letterSpacing: 2
                     }
 
                     Label {

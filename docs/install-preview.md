@@ -59,3 +59,27 @@ The current preview install still uses the existing Velyx runtime layout:
   `${VELYX_STATE_DIR:-$HOME/.velyx}`
 
 This is still a preview-stage installer, not a full consumer ISO workflow, but the user-facing path is now Velyx-native.
+
+## Explicit bare-metal target disk install
+
+For destructive SSD install, the installer now supports an explicit target disk:
+
+```bash
+sudo env \
+  VELYX_BASE_ROOTFS=/path/to/base-rootfs \
+  VELYX_BIN_DIR=/path/to/target/release \
+  VELYX_SHELL_BINARY=/path/to/velyx-shell \
+  bash scripts/velyx-install.sh \
+    --target-disk /dev/sda \
+    --artifact-dir /path/to/dist/velyx-os-preview-<build> \
+    --yes-wipe
+```
+
+Properties of this path:
+
+- `TARGET_DISK` is mandatory
+- partitioning happens only on that disk
+- EFI is created only on that disk
+- `grub-install` uses only that disk and that EFI mount
+- `--no-nvram` is used to avoid modifying foreign EFI boot entries
+- installer fails fast if `/boot/efi` is not mounted from the target disk

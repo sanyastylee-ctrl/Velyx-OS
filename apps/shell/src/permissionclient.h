@@ -8,6 +8,8 @@
 #include <QVariantList>
 #include <QVariantMap>
 
+class QProcess;
+
 class PermissionClient : public QObject
 {
     Q_OBJECT
@@ -437,6 +439,8 @@ private:
     QString m_firstBootModelSelectionMode {"auto_hardware"};
     QString m_firstBootDefaultSpace {"general"};
     QString m_firstBootPredictiveMode {"off"};
+    QProcess *m_firstBootStatusProcess {nullptr};
+    QProcess *m_firstBootStepProcess {nullptr};
     QString m_activeSpaceId;
     QString m_activeSpaceName;
     QString m_activeSpaceState {"unknown"};

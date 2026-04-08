@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ENV_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/velyx/velyx.env"
+HOME_DIR="${HOME:-/root}"
+ENV_FILE="${XDG_CONFIG_HOME:-${HOME_DIR}/.config}/velyx/velyx.env"
 if [[ -f "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_FILE}"
 fi
 
-STATE_DIR="${VELYX_STATE_DIR:-$HOME/.velyx}"
-PREFIX="${VELYX_INSTALL_PREFIX:-$HOME/.local/share/velyx}"
+STATE_DIR="${VELYX_STATE_DIR:-${HOME_DIR}/.velyx}"
+PREFIX="${VELYX_INSTALL_PREFIX:-${HOME_DIR}/.local/share/velyx}"
 LOG_FILE="${STATE_DIR}/first_boot.log"
 mkdir -p "${STATE_DIR}"
 

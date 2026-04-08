@@ -13,9 +13,11 @@ Type=simple
 EnvironmentFile=-%h/.config/velyx/velyx.env
 Environment=VELYX_USER_ID=%u
 Environment=HOME=%h
+Environment=XDG_RUNTIME_DIR=/run/user/%U
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%U/bus
 ExecStartPre=/usr/bin/velyx-shell-watchdog prestart
 ExecStartPre=/usr/lib/velyx/boot/velyx-firstboot-dispatch
-ExecStart=/usr/bin/velyx-entry --session
+ExecStart=/usr/lib/velyx/boot/velyx-shell-session-launch
 Restart=always
 RestartSec=1
 ExecStopPost=/usr/bin/velyx-shell-watchdog poststop

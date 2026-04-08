@@ -88,13 +88,20 @@ def prompt(question: str, default: str, options: list[str]) -> str:
 
 
 def run_install_backend(action: str) -> dict[str, Any]:
+    target_disk = os.environ.get("VELYX_INSTALL_TARGET_DISK", "").strip()
+    artifact_dir = os.environ.get("VELYX_INSTALL_ARTIFACT_DIR", "").strip()
     if action == "repair":
         tool = shutil.which("velyx-recovery")
         if tool:
             result = subprocess.run([tool], capture_output=True, text=True, timeout=120, check=False)
             return {"ok": result.returncode == 0, "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
         return {"ok": False, "stdout": "", "stderr": "velyx-recovery not available"}
-    result = subprocess.run(["bash", str(INSTALL_TOOL)], capture_output=True, text=True, timeout=240, check=False)
+    command = ["bash", str(INSTALL_TOOL)]
+    if target_disk:
+        command.extend(["--target-disk", target_disk, "--yes-wipe"])
+        if artifact_dir:
+            command.extend(["--artifact-dir", artifact_dir])
+    result = subprocess.run(command, capture_output=True, text=True, timeout=2400, check=False)
     return {"ok": result.returncode == 0, "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
 
 
@@ -163,6 +170,12 @@ def noninteractive_flow(args: list[str]) -> dict[str, Any]:
             index += 2
         elif item == "--predictive-mode":
             payload["predictive_mode"] = args[index + 1]
+            index += 2
+        elif item == "--target-disk":
+            os.environ["VELYX_INSTALL_TARGET_DISK"] = args[index + 1]
+            index += 2
+        elif item == "--artifact-dir":
+            os.environ["VELYX_INSTALL_ARTIFACT_DIR"] = args[index + 1]
             index += 2
         else:
             raise RuntimeError(f"unknown argument: {item}")

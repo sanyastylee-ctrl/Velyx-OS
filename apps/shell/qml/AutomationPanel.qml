@@ -8,6 +8,7 @@ Rectangle {
     id: root
 
     required property var permissionClient
+    readonly property bool hasPermissionClient: !!root.permissionClient
 
     radius: Theme.radiusLg
     color: Theme.shellSurfaceRaised
@@ -23,7 +24,7 @@ Rectangle {
         SectionHeader {
             Layout.fillWidth: true
             title: "Automation"
-            subtitle: root.permissionClient.lastRuleId.length > 0
+            subtitle: root.hasPermissionClient && root.permissionClient.lastRuleId.length > 0
                 ? "Last rule: " + root.permissionClient.lastRuleId + " • " + root.permissionClient.lastRuleResult
                 : "Reactive workflows keep the runtime aligned."
         }
@@ -35,66 +36,88 @@ Rectangle {
             StatusChip {
                 compact: true
                 label: "Enabled"
-                value: root.permissionClient.rules.filter(function(rule) { return rule.enabled === true }).length.toString()
+                value: root.hasPermissionClient
+                    ? root.permissionClient.rules.filter(function(rule) { return rule.enabled === true }).length.toString()
+                    : "0"
                 tone: "accent"
             }
 
             StatusChip {
                 compact: true
                 label: "Last result"
-                value: root.permissionClient.lastRuleResult.length > 0 ? root.permissionClient.lastRuleResult : "idle"
-                tone: root.permissionClient.lastRuleResult === "failed" ? "danger"
-                    : (root.permissionClient.lastRuleResult === "cooldown" ? "warning" : "success")
+                value: root.hasPermissionClient && root.permissionClient.lastRuleResult.length > 0 ? root.permissionClient.lastRuleResult : "idle"
+                tone: !root.hasPermissionClient ? "neutral"
+                    : (root.permissionClient.lastRuleResult === "failed" ? "danger"
+                        : (root.permissionClient.lastRuleResult === "cooldown" ? "warning" : "success"))
             }
         }
 
         ListView {
+            id: rulesList
             Layout.fillWidth: true
             Layout.fillHeight: true
             clip: true
             spacing: 8
-            model: root.permissionClient.rules
+            model: root.hasPermissionClient ? root.permissionClient.rules : []
 
-            delegate: Rectangle {
-                width: ListView.view.width
-                radius: Theme.radiusMd
-                color: modelData.rule_id === root.permissionClient.lastRuleId ? Theme.shellSurfaceOverlay : Theme.shellSurface
-                border.width: 1
-                border.color: modelData.rule_id === root.permissionClient.lastRuleId
-                    ? Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.28)
-                    : Theme.shellStroke
-                implicitHeight: 82
+            property bool viewReady: width > 0 && height > 0
 
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.margins: Theme.space3
-                    spacing: Theme.space3
+            delegate: Loader {
+                required property var modelData
+                readonly property bool ruleReady: !!modelData && typeof modelData === "object" && modelData.rule_id !== undefined
 
-                    ColumnLayout {
-                        Layout.fillWidth: true
-                        spacing: 2
+                width: rulesList.width
+                active: rulesList.viewReady && ruleReady
+                asynchronous: false
 
-                        Label {
-                            text: modelData.display_name || modelData.rule_id
-                            color: Theme.textPrimary
-                            font.pixelSize: 13
-                            font.weight: Font.DemiBold
-                            elide: Text.ElideRight
+                sourceComponent: Rectangle {
+                    property var ruleData: null
+
+                    width: rulesList.width
+                    radius: Theme.radiusMd
+                    color: ruleData.rule_id === root.permissionClient.lastRuleId ? Theme.shellSurfaceOverlay : Theme.shellSurface
+                    border.width: 1
+                    border.color: ruleData.rule_id === root.permissionClient.lastRuleId
+                        ? Qt.rgba(Theme.accentCool.r, Theme.accentCool.g, Theme.accentCool.b, 0.28)
+                        : Theme.shellStroke
+                    implicitHeight: 82
+
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.margins: Theme.space3
+                        spacing: Theme.space3
+
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 2
+
+                            Label {
+                                text: ruleData.display_name || ruleData.rule_id
+                                color: Theme.textPrimary
+                                font.pixelSize: 13
+                                font.weight: Font.DemiBold
+                                elide: Text.ElideRight
+                            }
+
+                            Label {
+                                text: (ruleData.trigger_type || "-") + " -> " + (ruleData.action_type || "-")
+                                color: Theme.textMuted
+                                font.pixelSize: 11
+                                elide: Text.ElideRight
+                            }
                         }
 
-                        Label {
-                            text: (modelData.trigger_type || "-") + " -> " + (modelData.action_type || "-")
-                            color: Theme.textMuted
-                            font.pixelSize: 11
-                            elide: Text.ElideRight
+                        Button {
+                            text: "Run"
+                            enabled: ruleData.enabled === true
+                            onClicked: root.permissionClient.runRule(ruleData.rule_id)
                         }
                     }
+                }
 
-                    Button {
-                        text: "Run"
-                        enabled: modelData.enabled === true
-                        onClicked: root.permissionClient.runRule(modelData.rule_id)
-                    }
+                onLoaded: {
+                    if (item)
+                        item.ruleData = modelData
                 }
             }
         }

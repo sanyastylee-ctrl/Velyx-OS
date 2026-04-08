@@ -1,6 +1,6 @@
 [Unit]
 Description=Velyx OS User Session Target
-Wants=velyx-settings.service velyx-permissions.service velyx-launcher.service velyx-diagnostics.service velyx-ai.service velyx-file.service velyx-update-engine.service velyx-recovery.service velyx-session-manager.service velyx-session-bootstrap.service velyx-shell.service
+Wants=velyx-settings.service velyx-permissions.service velyx-launcher.service velyx-diagnostics.service velyx-ai.service velyx-file.service velyx-update-engine.service velyx-recovery.service velyx-session-manager.service velyx-session-bootstrap.service
 After=graphical-session-pre.target dbus.service
 AllowIsolate=true
 

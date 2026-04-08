@@ -46,7 +46,7 @@ pub fn session_target() -> UnitDefinition {
         required: true,
         startup_order: 0,
         restart_policy: "none".to_string(),
-        contents: "[Unit]\nDescription=Velyx OS User Session Target\nWants=velyx-settings.service velyx-permissions.service velyx-launcher.service velyx-diagnostics.service velyx-ai.service velyx-file.service velyx-update-engine.service velyx-recovery.service velyx-shell.service\nAfter=graphical-session-pre.target dbus.service\nAllowIsolate=true\n"
+        contents: "[Unit]\nDescription=Velyx OS User Session Target\nWants=velyx-settings.service velyx-permissions.service velyx-launcher.service velyx-diagnostics.service velyx-ai.service velyx-file.service velyx-update-engine.service velyx-recovery.service\nAfter=graphical-session-pre.target dbus.service\nAllowIsolate=true\n"
             .to_string(),
     }
 }
@@ -139,23 +139,7 @@ pub fn core_units() -> Vec<UnitDefinition> {
             &env_exec("VELYX_RECOVERY_BINARY", "/usr/bin/velyx-recovery-service"),
             "velyx-session.target",
         ),
-        service_unit(
-            "velyx-shell.service",
-            "Velyx OS Shell",
-            "",
-            true,
-            60,
-            "always",
-            &env_exec("VELYX_SHELL_BINARY", "/usr/bin/velyx-shell"),
-            "velyx-session.target",
-        ),
     ];
-    if let Some(shell) = units.iter_mut().find(|unit| unit.unit_name == "velyx-shell.service") {
-        shell.contents = format!(
-            "[Unit]\nDescription=Velyx OS Shell\nPartOf=velyx-session.target\nAfter=velyx-permissions.service velyx-launcher.service graphical-session-pre.target dbus.service\nRequires=velyx-permissions.service velyx-launcher.service\nWants=velyx-settings.service\nAfter=velyx-settings.service\n\n[Service]\nType=simple\nEnvironmentFile=-%h/.config/velyx/velyx.env\nEnvironment=VELYX_USER_ID=%u\nEnvironment=HOME=%h\nExecStart={}\nRestart=always\nRestartSec=1\n\n[Install]\nWantedBy=velyx-session.target\n",
-            env_exec("VELYX_SHELL_BINARY", "/usr/bin/velyx-shell")
-        );
-    }
     units
 }
 

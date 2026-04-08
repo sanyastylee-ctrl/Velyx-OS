@@ -8,6 +8,7 @@ IMAGE_DIR="${BUILD_DIR}/image"
 IMAGE_NAME="${VELYX_IMAGE_NAME:-velyx-rootfs.img}"
 IMAGE_SIZE_MB="${VELYX_IMAGE_SIZE_MB:-4096}"
 IMAGE_PATH="${IMAGE_DIR}/${IMAGE_NAME}"
+FAKEROOT_STATE="${BUILD_DIR}/fakeroot.state"
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -18,13 +19,15 @@ require_cmd() {
 
 require_cmd truncate
 require_cmd mkfs.ext4
+require_cmd fakeroot
 
-"${ROOT_DIR}/scripts/build-rootfs.sh"
+rm -f "${FAKEROOT_STATE}"
+fakeroot -s "${FAKEROOT_STATE}" "${ROOT_DIR}/scripts/build-rootfs.sh"
 "${ROOT_DIR}/scripts/prepare-boot-artifacts.sh"
 
 mkdir -p "${IMAGE_DIR}"
 rm -f "${IMAGE_PATH}"
 truncate -s "${IMAGE_SIZE_MB}M" "${IMAGE_PATH}"
-mkfs.ext4 -F -d "${ROOTFS_DIR}" "${IMAGE_PATH}"
+fakeroot -i "${FAKEROOT_STATE}" mkfs.ext4 -F -d "${ROOTFS_DIR}" "${IMAGE_PATH}"
 
 echo "image created at ${IMAGE_PATH}"

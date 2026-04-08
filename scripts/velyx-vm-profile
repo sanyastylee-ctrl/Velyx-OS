@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -55,6 +56,51 @@ def command_ok(command: list[str], timeout: int = 12) -> bool:
         return False
 
 
+def command_output(command: list[str], timeout: int = 12) -> tuple[int, str, str]:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+        return result.returncode, result.stdout.strip(), result.stderr.strip()
+    except Exception as exc:
+        return 1, "", str(exc)
+
+
+def sudo_healthy() -> bool:
+    sudo_path = Path("/usr/bin/sudo")
+    sudo_conf = Path("/etc/sudo.conf")
+    if not sudo_path.exists() or not sudo_conf.exists():
+        return False
+    sudo_stat = sudo_path.stat()
+    sudo_conf_stat = sudo_conf.stat()
+    return (
+        sudo_stat.st_uid == 0
+        and sudo_conf_stat.st_uid == 0
+        and bool(sudo_stat.st_mode & stat.S_ISUID)
+    )
+
+
+def shell_runtime_healthy() -> bool:
+    shell = shutil.which("velyx-shell") or "/usr/bin/velyx-shell"
+    if not Path(shell).exists():
+        return False
+    exit_code, stdout, _ = command_output(["ldd", shell], timeout=8)
+    return exit_code == 0 and "not found" not in stdout
+
+
+def primary_shell_active() -> bool:
+    pid_file = state_dir() / "primary-shell.pid"
+    if pid_file.exists():
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8").strip())
+            return Path(f"/proc/{pid}").exists()
+        except Exception:
+            return False
+    exit_code, stdout, _ = command_output(
+        ["pgrep", "-u", str(os.getuid()), "-f", "velyx-entry --session|velyx-shell"],
+        timeout=8,
+    )
+    return exit_code == 0 and bool(stdout)
+
+
 def validation_report() -> dict:
     profile = load_profile()
     st = state_dir()
@@ -70,11 +116,17 @@ def validation_report() -> dict:
     dev_tool = tool_available("velyx-dev")
     entry_tool = tool_available("velyx-entry")
     release_builder = tool_available("velyx-release-preview")
+    dbus_user_ok = command_ok(["busctl", "--user", "--list"], timeout=8)
+    shell_service_ok = primary_shell_active()
 
     checks = {
         "release_builder_available": release_builder,
         "entry_available": entry_tool,
         "shell_starts": shell_tool,
+        "sudo_works": sudo_healthy(),
+        "dbus_user_session_exists": dbus_user_ok,
+        "shell_runtime_dependencies_present": shell_runtime_healthy(),
+        "primary_shell_active": shell_service_ok,
         "assistant_available": assistant_tool and command_ok(["python", str(ROOT / "scripts" / "velyx-assistant"), "status"]) if not shutil.which("velyx-assistant") and (ROOT / "scripts" / "velyx-assistant").exists() else assistant_tool,
         "model_layer_available": model_tool,
         "update_available": update_tool,
@@ -103,7 +155,13 @@ def validation_report() -> dict:
         }
     }
 
-    status = "ok" if checks["entry_available"] and checks["shell_starts"] else "degraded"
+    status = "ok" if (
+        checks["entry_available"]
+        and checks["shell_starts"]
+        and checks["sudo_works"]
+        and checks["dbus_user_session_exists"]
+        and checks["shell_runtime_dependencies_present"]
+    ) else "degraded"
     if update_state.get("recovery_needed", False):
         fail_cases["install_fail"]["detected"] = True
         fail_cases["shell_fail"]["detected"] = True
@@ -126,6 +184,10 @@ def validation_report() -> dict:
             "velyx-status",
             "velyx-logs.sh",
             "journalctl --user -b",
+            "busctl --user --list",
+            "cat ~/.velyx/primary-shell.pid",
+            "ldd /usr/bin/velyx-shell",
+            "stat /usr/bin/sudo /etc/sudo.conf",
         ],
     }
 

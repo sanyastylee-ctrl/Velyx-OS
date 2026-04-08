@@ -95,6 +95,37 @@ That route checks `~/.velyx/first_boot.json`:
 
 This keeps the user inside Velyx instead of dropping them into a generic desktop path after reboot.
 
+## Graphics Mode Selection
+
+`velyx-entry --session` inherits the shell graphics mode from `~/.config/velyx/velyx.env`.
+
+Supported values:
+
+```bash
+VELYX_GRAPHICS_MODE=auto
+VELYX_GRAPHICS_MODE=gpu
+VELYX_GRAPHICS_MODE=software
+```
+
+Behavior:
+
+- `auto`: prefer `X11 + OpenGL`, then fall back to `X11 + software`, then `linuxfb`
+- `gpu`: force the preferred GPU path and log the exact failure if it does not come up
+- `software`: force the safe software path
+
+For deep startup diagnostics:
+
+```bash
+VELYX_SHELL_DEBUG=1
+```
+
+Relevant logs now include:
+
+- requested / active graphics mode
+- fallback state and reason
+- Qt graphics backend
+- OpenGL vendor / renderer / version
+
 ## Intended session flow
 
 The target user journey is:

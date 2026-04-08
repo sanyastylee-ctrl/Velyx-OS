@@ -38,6 +38,20 @@ def log_event(event: str, status: str, detail: str = "") -> None:
         fh.write(f"{now_iso()} event={event} status={status} {detail}\n")
 
 
+def shell_debug_enabled() -> bool:
+    return os.environ.get("VELYX_SHELL_DEBUG", "0") == "1" or "--debug-shell" in sys.argv
+
+
+def log_debug(message: str) -> None:
+    if not shell_debug_enabled():
+        return
+    line = f"{now_iso()} debug {message}"
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with ENTRY_LOG.open("a", encoding="utf-8") as fh:
+        fh.write(line + "\n")
+    print(line, file=sys.stderr, flush=True)
+
+
 def print_json(payload: Any) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
 
@@ -54,6 +68,7 @@ def tool_path(name: str) -> list[str]:
 
 def run_tool(name: str, args: list[str], timeout: int = 240) -> dict[str, Any]:
     command = [*tool_path(name), *args]
+    log_debug(f"run_tool command={command} timeout={timeout}")
     result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
     output = result.stdout.strip()
     payload: dict[str, Any]
@@ -102,6 +117,10 @@ def shell_command() -> list[str]:
 
 
 def run_shell_session() -> dict[str, Any]:
+    log_debug(
+        "run_shell_session begin "
+        f"cwd={os.getcwd()} home={Path.home()} tty={os.ttyname(0) if os.isatty(0) else 'not-a-tty'}"
+    )
     first_boot = run_tool("velyx-firstboot", ["status"], timeout=30)
     completed = bool(first_boot.get("completed", False))
     if not completed:
@@ -113,8 +132,28 @@ def run_shell_session() -> dict[str, Any]:
     command = shell_command()
     env = os.environ.copy()
     env.setdefault("VELYX_PRODUCT_ENTRY", "velyx-entry")
+    log_debug(
+        "shell command resolved "
+        f"command={command} completed={completed} "
+        f"graphics_requested={env.get('VELYX_GRAPHICS_MODE_REQUESTED','')} "
+        f"graphics_active={env.get('VELYX_GRAPHICS_MODE_ACTIVE','')} "
+        f"graphics_fallback={env.get('VELYX_GRAPHICS_FALLBACK_OCCURRED','')} "
+        f"graphics_reason={env.get('VELYX_GRAPHICS_FALLBACK_REASON','')} "
+        f"qt_qpa={env.get('QT_QPA_PLATFORM','')} "
+        f"qt_quick_backend={env.get('QT_QUICK_BACKEND','')} "
+        f"qsg_rhi={env.get('QSG_RHI_BACKEND','')} "
+        f"qt_xcb_gl_integration={env.get('QT_XCB_GL_INTEGRATION','')} "
+        f"libgl_software={env.get('LIBGL_ALWAYS_SOFTWARE','')} "
+        f"qml_import={env.get('QML2_IMPORT_PATH','')} "
+        f"plugin_path={env.get('QT_PLUGIN_PATH','')} "
+        f"dbus={env.get('DBUS_SESSION_BUS_ADDRESS','')}"
+    )
     try:
-        result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False, env=env)
+        if shell_debug_enabled():
+            log_debug("launching shell with inherited stdout/stderr")
+            result = subprocess.run(command, text=True, timeout=120, check=False, env=env)
+        else:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=120, check=False, env=env)
     except FileNotFoundError:
         return {
             "completed": completed,
@@ -123,14 +162,20 @@ def run_shell_session() -> dict[str, Any]:
             "exit_code": 1,
             "stderr": "Velyx Shell is not installed yet.",
         }
-    return {
+    payload = {
         "completed": completed,
         "first_boot_required": not completed,
         "shell_command": command,
         "exit_code": result.returncode,
-        "stdout": result.stdout.strip(),
-        "stderr": result.stderr.strip(),
+        "stdout": getattr(result, "stdout", "") or "",
+        "stderr": getattr(result, "stderr", "") or "",
     }
+    log_debug(
+        "shell exited "
+        f"exit_code={payload['exit_code']} "
+        f"stdout_len={len(payload['stdout'])} stderr_len={len(payload['stderr'])}"
+    )
+    return payload
 
 
 def interactive() -> dict[str, Any]:
@@ -163,6 +208,8 @@ def noninteractive(args: list[str]) -> dict[str, str]:
 def main() -> int:
     try:
         session_mode = "--session" in sys.argv
+        if shell_debug_enabled():
+            log_debug(f"entry argv={sys.argv[1:]} env_file_keys={sorted(ENV.keys())}")
         payload = interactive() if "--non-interactive" not in sys.argv and not session_mode else noninteractive(sys.argv[1:])
         action = payload["action"]
         log_event("entry_begin", "started", f"action={action}")

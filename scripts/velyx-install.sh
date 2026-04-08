@@ -14,6 +14,10 @@ LIBEXEC_DIR="${PREFIX}/libexec"
 BIN_DIR="${PREFIX}/bin"
 ENV_FILE="${CONFIG_DIR}/velyx.env"
 MODE="full"
+TARGET_DISK=""
+ARTIFACT_DIR=""
+YES_WIPE=0
+BAREMETAL_INSTALLER="${ROOT_DIR}/scripts/velyx-baremetal-install.sh"
 
 if [[ "${1:-}" == "--payload-only" ]]; then
   MODE="payload-only"
@@ -22,6 +26,27 @@ elif [[ "${1:-}" == "--units-only" ]]; then
   MODE="units-only"
   shift
 fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --target-disk)
+      TARGET_DISK="$2"
+      shift 2
+      ;;
+    --artifact-dir)
+      ARTIFACT_DIR="$2"
+      shift 2
+      ;;
+    --yes-wipe)
+      YES_WIPE=1
+      shift
+      ;;
+    *)
+      echo "unknown argument: $1" >&2
+      exit 1
+      ;;
+  esac
+done
 
 require_cmd() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -47,6 +72,52 @@ resolve_binary_source() {
     return 0
   fi
   return 1
+}
+
+detect_qt_prefix() {
+  local shell_path="$1"
+  local core_path=""
+  core_path="$(ldd "${shell_path}" 2>/dev/null | awk '/libQt6Core\.so\.6/ {print $3; exit}')"
+  if [[ -n "${core_path}" ]]; then
+    dirname "$(dirname "${core_path}")"
+    return 0
+  fi
+
+  return 1
+}
+
+detect_qml_build_root() {
+  local shell_path="$1"
+  local shell_dir=""
+  shell_dir="$(cd "$(dirname "${shell_path}")" && pwd)"
+  local candidate="${shell_dir%/apps/shell}"
+  if [[ -d "${candidate}/packages/design-system" ]]; then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+  return 1
+}
+
+install_project_qml_module() {
+  local source_dir="$1"
+  local module_rel_path="$2"
+  local qmltypes_name="$3"
+  local target_dir="${PREFIX}/qml/${module_rel_path}"
+
+  mkdir -p "${target_dir}"
+  cp -a "${source_dir}/qml/${module_rel_path}/." "${target_dir}/"
+  if [[ -n "${qmltypes_name}" && -f "${source_dir}/${qmltypes_name}" ]]; then
+    cp -a "${source_dir}/${qmltypes_name}" "${target_dir}/${qmltypes_name}"
+  fi
+}
+
+install_project_qml_modules() {
+  local shell_path="$1"
+  local qml_build_root=""
+  qml_build_root="$(detect_qml_build_root "${shell_path}")" || return 0
+
+  install_project_qml_module "${qml_build_root}/packages/design-system" "Velyx/DesignSystem" "VelyxDesignSystem.qmltypes"
+  install_project_qml_module "${qml_build_root}/packages/core-ui" "Velyx/UI" "VelyxCoreUi.qmltypes"
 }
 
 install_binary() {
@@ -139,9 +210,59 @@ write_update_state() {
 EOF
 }
 
+write_runtime_env() {
+  local shell_path="$1"
+  local qt_prefix="${VELYX_QT_PREFIX:-}"
+  if [[ -z "${qt_prefix}" ]]; then
+    qt_prefix="$(detect_qt_prefix "${shell_path}" || true)"
+  fi
+
+  local qml_import_path="${PREFIX}/qml"
+  if [[ -n "${qt_prefix}" ]]; then
+    qml_import_path="${PREFIX}/qml:${qt_prefix}/qml"
+  fi
+
+  cat > "${ENV_FILE}" <<EOF
+VELYX_SESSION_MANAGER_BINARY=${BIN_DIR}/velyx-session-manager
+VELYX_SETTINGS_BINARY=${BIN_DIR}/velyx-settings-service
+VELYX_PERMISSIONS_BINARY=${BIN_DIR}/velyx-permissions-service
+VELYX_LAUNCHER_BINARY=${BIN_DIR}/velyx-launcher-service
+VELYX_DIAGNOSTICS_BINARY=${BIN_DIR}/velyx-diagnostics-service
+VELYX_AI_BINARY=${BIN_DIR}/velyx-ai-service
+VELYX_FILE_BINARY=${BIN_DIR}/velyx-file-service
+VELYX_UPDATE_ENGINE_BINARY=${BIN_DIR}/velyx-update-engine
+VELYX_RECOVERY_BINARY=${BIN_DIR}/velyx-recovery-service
+VELYX_SHELL_BINARY=${BIN_DIR}/velyx-shell
+VELYX_MANIFESTS_DIR=${MANIFESTS_DIR}
+VELYX_INSTALL_PREFIX=${PREFIX}
+VELYX_STATE_DIR=${STATE_DIR}
+VELYX_SESSION_BACKEND=auto
+VELYX_APP_REGISTRY=${STATE_DIR}/apps_registry.json
+VELYX_USER_APPS_DIR=${STATE_DIR}/apps
+VELYX_SPACES_REGISTRY=${STATE_DIR}/spaces_registry.json
+VELYX_INTENTS_REGISTRY=${STATE_DIR}/intents_registry.json
+VELYX_RULES_REGISTRY=${STATE_DIR}/rules_registry.json
+VELYX_QT_PREFIX=${qt_prefix}
+QT_PLUGIN_PATH=${qt_prefix:+${qt_prefix}/plugins}
+QML2_IMPORT_PATH=${qml_import_path}
+QML_IMPORT_PATH=${qml_import_path}
+EOF
+}
+
 require_cmd install
 require_cmd mkdir
 require_cmd sed
+
+if [[ -n "${TARGET_DISK}" ]]; then
+  baremetal_args=(--target-disk "${TARGET_DISK}")
+  if [[ -n "${ARTIFACT_DIR}" ]]; then
+    baremetal_args+=(--artifact-dir "${ARTIFACT_DIR}")
+  fi
+  if [[ "${YES_WIPE}" -eq 1 ]]; then
+    baremetal_args+=(--yes-wipe)
+  fi
+  exec "${BAREMETAL_INSTALLER}" "${baremetal_args[@]}"
+fi
 
 if [[ "${MODE}" != "payload-only" ]]; then
   require_cmd systemctl
@@ -175,11 +296,13 @@ if [[ "${MODE}" != "units-only" ]]; then
     echo "missing shell binary: set VELYX_SHELL_BINARY or place velyx-shell in ${BIN_SOURCE_DIR}" >&2
     exit 1
   fi
+  install_project_qml_modules "${VELYX_SHELL_BINARY:-$(resolve_binary_source "velyx-shell")}"
 
   install -Dm755 "${ROOT_DIR}/scripts/velyx-user-session-bootstrap.sh" "${LIBEXEC_DIR}/velyx-user-session-bootstrap"
   install -Dm755 "${ROOT_DIR}/scripts/velyx-firstboot-dispatch.sh" "${LIBEXEC_DIR}/velyx-firstboot-dispatch"
   install -Dm755 "${ROOT_DIR}/scripts/velyx-system-session-bootstrap.sh" "${LIBEXEC_DIR}/velyx-system-session-bootstrap"
   install -Dm755 "${ROOT_DIR}/scripts/velyx-recovery-bootstrap.sh" "${LIBEXEC_DIR}/velyx-recovery-bootstrap"
+  install -Dm755 "${ROOT_DIR}/scripts/velyx-shell-session-launch.sh" "${LIBEXEC_DIR}/velyx-shell-session-launch"
   install_helper_script "${ROOT_DIR}/scripts/velyx-status" "velyx-status"
   install_helper_script "${ROOT_DIR}/scripts/velyx-restart.sh" "velyx-restart.sh"
   install_helper_script "${ROOT_DIR}/scripts/velyx-logs.sh" "velyx-logs.sh"
@@ -204,6 +327,7 @@ if [[ "${MODE}" != "units-only" ]]; then
   install_helper_script "${ROOT_DIR}/scripts/velyx-diagnostics" "velyx-diagnostics"
   install_helper_script "${ROOT_DIR}/scripts/velyx-vm-profile" "velyx-vm-profile"
   install_helper_script "${ROOT_DIR}/scripts/velyx-vm-preview" "velyx-vm-preview"
+  install_helper_script "${ROOT_DIR}/scripts/velyx-baremetal-install.sh" "velyx-baremetal-install.sh"
 
   cp -a "${ROOT_DIR}/app-manifests/." "${MANIFESTS_DIR}/"
   if [[ -d "${ROOT_DIR}/profiles" ]]; then
@@ -217,26 +341,7 @@ if [[ "${MODE}" != "units-only" ]]; then
 fi
 
 if [[ "${MODE}" != "payload-only" ]]; then
-  cat > "${ENV_FILE}" <<EOF
-VELYX_SESSION_MANAGER_BINARY=${BIN_DIR}/velyx-session-manager
-VELYX_SETTINGS_BINARY=${BIN_DIR}/velyx-settings-service
-VELYX_PERMISSIONS_BINARY=${BIN_DIR}/velyx-permissions-service
-VELYX_LAUNCHER_BINARY=${BIN_DIR}/velyx-launcher-service
-VELYX_DIAGNOSTICS_BINARY=${BIN_DIR}/velyx-diagnostics-service
-VELYX_AI_BINARY=${BIN_DIR}/velyx-ai-service
-VELYX_FILE_BINARY=${BIN_DIR}/velyx-file-service
-VELYX_UPDATE_ENGINE_BINARY=${BIN_DIR}/velyx-update-engine
-VELYX_RECOVERY_BINARY=${BIN_DIR}/velyx-recovery-service
-VELYX_SHELL_BINARY=${BIN_DIR}/velyx-shell
-VELYX_MANIFESTS_DIR=${MANIFESTS_DIR}
-VELYX_INSTALL_PREFIX=${PREFIX}
-VELYX_STATE_DIR=${STATE_DIR}
-VELYX_APP_REGISTRY=${STATE_DIR}/apps_registry.json
-VELYX_USER_APPS_DIR=${STATE_DIR}/apps
-VELYX_SPACES_REGISTRY=${STATE_DIR}/spaces_registry.json
-VELYX_INTENTS_REGISTRY=${STATE_DIR}/intents_registry.json
-VELYX_RULES_REGISTRY=${STATE_DIR}/rules_registry.json
-EOF
+  write_runtime_env "${BIN_DIR}/velyx-shell"
 
   for unit in "${ROOT_DIR}"/systemd/user/*; do
     render_user_unit "${unit}" "${UNIT_DIR}/$(basename "${unit}")"
@@ -282,6 +387,7 @@ EOF
   install_script_binary "${ROOT_DIR}/scripts/velyx-diagnostics" "velyx-diagnostics"
   install_script_binary "${ROOT_DIR}/scripts/velyx-vm-profile" "velyx-vm-profile"
   install_script_binary "${ROOT_DIR}/scripts/velyx-vm-preview" "velyx-vm-preview"
+  install_script_binary "${ROOT_DIR}/scripts/velyx-baremetal-install.sh" "velyx-baremetal-install.sh"
   if command -v python3 >/dev/null 2>&1; then
     "${BIN_DIR}/velyx-app" sync-system >/dev/null || true
     "${BIN_DIR}/velyx-space" seed-defaults >/dev/null || true

@@ -39,6 +39,7 @@ The release bundle also includes:
 Build on a Linux host or Linux-compatible build environment with:
 
 - `bash`
+- `fakeroot`
 - `truncate`
 - `mkfs.ext4`
 - `tar`
@@ -50,6 +51,11 @@ Environment:
 - `VELYX_BASE_ROOTFS=/path/to/minimal-systemd-rootfs`
 - `VELYX_BIN_DIR=/path/to/compiled-velyx-binaries`
 - `VELYX_SHELL_BINARY=/path/to/velyx-shell` if shell is outside the binary dir
+
+The preview image now expects the base rootfs to include both:
+
+- a GPU-capable X11 runtime (`libgl1`, `libegl1`, `libgles2`, `libgbm1`, `libdrm2`, Mesa drivers)
+- a safe software fallback path
 
 ## Build Commands
 
@@ -103,6 +109,29 @@ The preview image path now pulls in:
 7. Complete `Velyx First Boot`.
 8. Continue into `Velyx Shell`.
 
+## Graphics Runtime
+
+`Velyx Shell` now uses a dual graphics path:
+
+- preferred: `X11 + xcb + OpenGL`
+- fallback: `X11 + software`, then `linuxfb`
+
+Mode selection is controlled through `VELYX_GRAPHICS_MODE`:
+
+- `auto`
+- `gpu`
+- `software`
+
+In `auto`, the shell tries the preferred GPU path first and logs a fallback reason before dropping to software.
+
+The shell startup log now records:
+
+- requested mode
+- active mode
+- fallback state
+- Qt graphics backend
+- OpenGL vendor / renderer / version
+
 ## Validation
 
 Validate the artifact on the host:
@@ -119,6 +148,13 @@ velyx-version
 velyx-vm-profile validate
 velyx-logs.sh
 journalctl --user -b
+```
+
+Useful graphics-specific checks:
+
+```bash
+journalctl -b | grep -E 'graphics backend api=|graphics opengl vendor=|graphics_fallback|shell-session-launch backend=x11'
+glxinfo -B
 ```
 
 Functional checks inside the VM:

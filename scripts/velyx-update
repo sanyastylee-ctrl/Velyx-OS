@@ -253,7 +253,7 @@ EOF
 
 render_runtime_units() {
   local source_install_script="${SOURCE_ROOT}/scripts/velyx-install.sh"
-  if [[ ! -x "${source_install_script}" ]]; then
+  if [[ ! -f "${source_install_script}" ]]; then
     echo "missing install script in source: ${source_install_script}" >&2
     return 1
   fi
@@ -263,7 +263,7 @@ render_runtime_units() {
   VELYX_BIN_DIR="${SOURCE_BIN_DIR}" \
   VELYX_SHELL_BINARY="${SOURCE_SHELL_BINARY}" \
   VELYX_BUILD_VERSION="${CANDIDATE_VERSION}" \
-  "${source_install_script}" --units-only >/dev/null
+  bash "${source_install_script}" --units-only >/dev/null
 }
 
 backup_runtime_units() {
@@ -314,7 +314,34 @@ health_check() {
     attempts=$((attempts + 1))
     sleep 1
   done
+
+  if headless_shell_probe; then
+    return 0
+  fi
   return 1
+}
+
+headless_shell_probe() {
+  local env_file="${ENV_FILE}"
+  local shell_binary="${PREFIX}/bin/velyx-shell"
+
+  [[ -x "${shell_binary}" ]] || return 1
+
+  set +u
+  set -a
+  if [[ -f "${env_file}" ]]; then
+    # shellcheck disable=SC1090
+    source "${env_file}"
+  fi
+  set +a
+  set -u
+
+  QT_QPA_PLATFORM=offscreen \
+  QT_QUICK_BACKEND=software \
+  QSG_RHI_BACKEND=software \
+  VELYX_SHELL_PROBE=1 \
+  VELYX_SHELL_DEBUG=0 \
+  "${shell_binary}" >/dev/null 2>&1
 }
 
 perform_rollback() {
@@ -407,7 +434,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "${SOURCE_SPEC}" && is_remote_source "${SOURCE_SPEC}" ]]; then
+if [[ -n "${SOURCE_SPEC}" ]] && is_remote_source "${SOURCE_SPEC}"; then
   NETWORK_STATE="$(network_state)"
   if ! network_update_reachability; then
     log_event "update_network_limited" "warning" "state=${NETWORK_STATE} source=${SOURCE_SPEC}"
@@ -442,7 +469,7 @@ if [[ ! -d "${SOURCE_ROOT}" ]]; then
   exit 1
 fi
 
-if [[ ! -x "${SOURCE_ROOT}/scripts/velyx-install.sh" ]]; then
+if [[ ! -f "${SOURCE_ROOT}/scripts/velyx-install.sh" ]]; then
   echo "source root does not contain scripts/velyx-install.sh" >&2
   exit 1
 fi
@@ -467,7 +494,7 @@ VELYX_STATE_DIR="${STATE_DIR}" \
 VELYX_BIN_DIR="${SOURCE_BIN_DIR}" \
 VELYX_SHELL_BINARY="${SOURCE_SHELL_BINARY}" \
 VELYX_BUILD_VERSION="${CANDIDATE_VERSION}" \
-"${SOURCE_ROOT}/scripts/velyx-install.sh" --payload-only >/dev/null
+bash "${SOURCE_ROOT}/scripts/velyx-install.sh" --payload-only >/dev/null
 log_event "update_payload_prepared" "ok" "candidate_version=${CANDIDATE_VERSION}"
 
 log_event "update_validation_begin" "started" "candidate_version=${CANDIDATE_VERSION}"
@@ -494,6 +521,8 @@ for required in \
   "${STAGING_PREFIX}/bin/velyx-shell" \
   "${STAGING_PREFIX}/libexec/velyx-user-session-bootstrap" \
   "${STAGING_PREFIX}/libexec/velyx-recovery-bootstrap" \
+  "${STAGING_PREFIX}/qml/Velyx/DesignSystem/qmldir" \
+  "${STAGING_PREFIX}/qml/Velyx/UI/qmldir" \
   "${STAGING_PREFIX}/share/version.txt"
 do
   if [[ ! -e "${required}" ]]; then

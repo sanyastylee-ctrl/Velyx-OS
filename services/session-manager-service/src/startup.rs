@@ -116,9 +116,9 @@ pub async fn bootstrap_session(
         user_id,
         "shell_start_begin",
         SessionState::StartingShell,
-        "velyx-shell.service",
+        "primary-shell",
         "ok",
-        "starting shell after core services ready",
+        "waiting for tty1 primary shell after core services ready",
     )
     .map_err(SessionManagerError::StartupFailed)?;
 
@@ -135,7 +135,7 @@ pub async fn bootstrap_session(
                 user_id,
                 "shell_start_failed",
                 SessionState::Failed,
-                "velyx-shell.service",
+                "primary-shell",
                 "failed",
                 &reason,
             )
@@ -162,7 +162,7 @@ pub async fn bootstrap_session(
             user_id,
             "shell_start_failed",
             SessionState::Failed,
-            "velyx-shell.service",
+            "primary-shell",
             "failed",
             &reason,
         )
@@ -186,7 +186,7 @@ pub async fn bootstrap_session(
             SessionState::StartingShell.as_str(),
             SessionState::StartingShell.as_str(),
             user_id,
-            "velyx-shell.service",
+            "primary-shell",
             "ok",
             &format!("shell_pid={}", shell.shell_pid.unwrap_or_default()),
         )

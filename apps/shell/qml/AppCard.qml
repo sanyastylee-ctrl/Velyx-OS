@@ -48,9 +48,11 @@ Rectangle {
         ColorAnimation { duration: Theme.motionBase }
     }
 
-    MouseArea {
-        anchors.fill: parent
-        onClicked: root.selectRequested(root.app.app_id)
+    TapHandler {
+        acceptedButtons: Qt.LeftButton
+        acceptedDevices: PointerDevice.Mouse | PointerDevice.TouchPad
+        gesturePolicy: TapHandler.ReleaseWithinBounds
+        onTapped: root.selectRequested(root.app.app_id)
     }
 
     ColumnLayout {
